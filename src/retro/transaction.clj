@@ -1,7 +1,7 @@
-(ns tractor.transaction)
+(ns retro.transaction)
 
 (def ^{:dynamic true} *transactions* #{})
-(def ^{:dynamic true} *revision*     #{})
+(def ^{:dynamic true} *revision*     nil)
 
 (defprotocol Transactional
   (txn-wrap [obj f] "Wrap the given function in a transaction, returning a new function."))
@@ -83,4 +83,3 @@
   "Throws an exception that will be caught by catch-rollbacks to abort the transaction."
   []
   (throw (javax.transaction.TransactionRolledbackException.)))
-e
