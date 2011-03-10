@@ -26,7 +26,7 @@
 (defn- skip-past-revisions
   "Wraps the given function in a new function that skips it if the current revision has already
    been applied, also setting the revision upon executing the function."
-  [obj f]
+  [f obj]
   (fn []
     (if (or (nil? *revision*) (contains? *in-revision* obj))
       (f)
@@ -42,7 +42,7 @@
 (defn- ignore-nested-transactions
   "Takes two functions, one that's wrapped in a transaction and one that's not, returning a new fn
    that calls the transactional fn if not currently in a transaction or otherwise calls the plain fn."
-  [obj f f-txn]
+  [f-txn f obj]
   (fn []
     (if (contains? *in-transaction* obj)
       (f)
@@ -56,7 +56,7 @@
     (try (f)
          (catch javax.transaction.TransactionRolledbackException e))))
 
-(defn wrap-txn [obj f]
+(defn wrapped-txn [f obj]
   (if (satisfies? WrappedTransactional obj)
     (txn-wrap obj f)
     (fn []
@@ -70,16 +70,16 @@
 
 (defn wrap-transaction
   "Takes a function and returns a new function wrapped in a transaction on the given object."
-  [obj f]
-  (->> (wrap-txn obj f)
-       (catch-rollbacks)
-       (ignore-nested-transactions obj f)
-       (skip-past-revisions obj)))
+  [f obj]
+  (-> (wrapped-txn f obj)
+      (catch-rollbacks)
+      (ignore-nested-transactions f obj)
+      (skip-past-revisions obj)))
 
 (defmacro with-transaction
   "Execute forms within a transaction on the specified object."
   [obj & forms]
-  `((wrap-transaction ~obj (fn [] ~@forms))))
+  `((wrap-transaction (fn [] ~@forms) ~obj)))
 
 (defn abort-transaction
   "Throws an exception that will be caught by catch-rollbacks to abort the transaction."
