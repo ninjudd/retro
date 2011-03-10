@@ -1,15 +1,15 @@
-(ns retro.transaction)
+(ns retro.core)
 
 (def ^{:dynamic true} *transactions* #{})
 (def ^{:dynamic true} *revision*     nil)
 
 (defprotocol Transactional
-  (txn-wrap [obj f] "Wrap the given function in a transaction, returning a new function."))
-
-(defprotocol TransactionalSplit
   (txn-begin    [obj] "Begin a new transaction.")
   (txn-commit   [obj] "Commit the current transaction.")
   (txn-rollback [obj] "Rollback the current transaction."))
+
+(defprotocol WrappedTransactional
+  (txn-wrap [obj f] "Wrap the given function in a transaction, returning a new function."))
 
 (defprotocol Revisioned
   (get-revision  [obj]     "Returns the current revision.")
@@ -25,16 +25,16 @@
 (defn- skip-past-revisions
   "Wraps the given function in a new function that skips it if the current revision has already
    been applied, also setting the revision upon executing the function."
-  [layer f]
+  [obj f]
   (fn []
-    (if-not layer/*rev*
+    (if-not *revision*
       (f)
       (let [rev (or (get-revision obj) 0)]
         (if (<= *revision* rev)
-          (printf "skipping revision: revision [%s] <= current revision [%s]\n" layer/*rev* rev)
+          (printf "skipping revision: revision [%s] <= current revision [%s]\n" *revision* rev)
           (let [result (f)]
             (if *revision*
-              (set-revision! obj rev))
+              (set-revision! obj *revision*))
             result))))))
 
 (defn- ignore-nested-transactions
@@ -54,28 +54,28 @@
     (try (f)
          (catch javax.transaction.TransactionRolledbackException e))))
 
-(defn- wrap-txn-split [obj f]
-  (fn []
-    (txn-begin obj)
-    (try (let [result (f)]
-           (txn-commit obj)
-           result)
-         (catch Throwable e
-           (txn-abort obj)
-           (throw e)))))
+(defn wrap-txn [obj f]
+  (if (satisfies? WrappedTransactional obj)
+    (txn-wrap obj f)
+    (fn []
+      (txn-begin obj)
+      (try (let [result (f)]
+             (txn-commit obj)
+             result)
+           (catch Throwable e
+             (txn-rollback obj)
+             (throw e))))))
 
 (defn wrap-transaction
   "Takes a function and returns a new function wrapped in a transaction on the given object."
   [obj f]
-  (->> (if (satisfies? Transactional obj)
-         (wrap-txn obj f)
-         (wrap-txn-split obj f))
+  (->> (wrap-txn obj f)
        (catch-rollbacks)
-       (skip-past-revisions obj)
-       (ignore-nested-transactions obj f)))
+       (ignore-nested-transactions obj f)
+       (skip-past-revisions obj)))
 
 (defmacro with-transaction
-  "Execute forms withing a transaction on the named layer."
+  "Execute forms within a transaction on the specified object."
   [obj & forms]
   `((wrap-transaction ~obj (fn [] ~@forms))))
 
