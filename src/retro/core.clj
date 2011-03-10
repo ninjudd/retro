@@ -3,6 +3,8 @@
 (def ^{:dynamic true} *transactions* #{})
 (def ^{:dynamic true} *revision*     nil)
 
+(def ^{:dynamic true :private true} *in-revision* nil)
+
 (defprotocol Transactional
   (txn-begin    [obj] "Begin a new transaction.")
   (txn-commit   [obj] "Commit the current transaction.")
@@ -27,15 +29,16 @@
    been applied, also setting the revision upon executing the function."
   [obj f]
   (fn []
-    (if-not *revision*
+    (if (or (nil? *revision*) *in-revision*)
       (f)
       (let [rev (or (get-revision obj) 0)]
         (if (<= *revision* rev)
           (printf "skipping revision: revision [%s] <= current revision [%s]\n" *revision* rev)
-          (let [result (f)]
-            (if *revision*
-              (set-revision! obj *revision*))
-            result))))))
+          (binding [*in-revision* true]
+            (let [result (f)]
+              (if *revision*
+                (set-revision! obj *revision*))
+              result)))))))
 
 (defn- ignore-nested-transactions
   "Takes two functions, one that's wrapped in a transaction and one that's not, returning a new fn
