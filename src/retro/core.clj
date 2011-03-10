@@ -1,9 +1,8 @@
 (ns retro.core)
 
-(def ^{:dynamic true} *transactions* #{})
-(def ^{:dynamic true} *revision*     nil)
-
-(def ^{:dynamic true :private true} *in-revision* nil)
+(def ^{:dynamic true} *in-transaction* #{})
+(def ^{:dynamic true} *in-revision*    #{})
+(def ^{:dynamic true} *revision*       nil)
 
 (defprotocol Transactional
   (txn-begin    [obj] "Begin a new transaction.")
@@ -29,12 +28,12 @@
    been applied, also setting the revision upon executing the function."
   [obj f]
   (fn []
-    (if (or (nil? *revision*) *in-revision*)
+    (if (or (nil? *revision*) (contains? *in-revision* obj))
       (f)
       (let [rev (or (get-revision obj) 0)]
         (if (<= *revision* rev)
           (printf "skipping revision: revision [%s] <= current revision [%s]\n" *revision* rev)
-          (binding [*in-revision* true]
+          (binding [*in-revision* (conj *in-revision* obj)]
             (let [result (f)]
               (if *revision*
                 (set-revision! obj *revision*))
@@ -45,9 +44,9 @@
    that calls the transactional fn if not currently in a transaction or otherwise calls the plain fn."
   [obj f f-txn]
   (fn []
-    (if (contains? *transactions* obj)
+    (if (contains? *in-transaction* obj)
       (f)
-      (binding [*transactions* (conj *transactions* obj)]
+      (binding [*in-transaction* (conj *in-transaction* obj)]
         (f-txn)))))
 
 (defn- catch-rollbacks
