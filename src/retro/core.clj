@@ -18,15 +18,10 @@
 
 (defmacro at-revision
   "Execute the given forms with the curren revision set to rev. Can be used to mark changes with a given
-   revision, or read the state at a given revision.
-   If rev is zero or negative, it is treated as a \"diff\" from the current revision:
-   -2 meaning \"two revisions ago\", for example."
+   revision, or read the state at a given revision."
   [rev & forms]
-  `(let [rev# ~rev]
-     (binding [*revision* (if (pos? rev#)
-                            rev#
-                            (+ *revision* rev#))]
-      ~@forms)))
+  `(binding [*revision* ~rev]
+      ~@forms))
 
 (defn- skip-past-revisions
   "Wraps the given function in a new function that skips it if the current revision has already
