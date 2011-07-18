@@ -1,4 +1,5 @@
-(ns retro.core)
+(ns retro.core
+  (:import (javax.transaction InvalidTransactionException TransactionRolledbackException)))
 
 (def ^{:dynamic true} *in-transaction* #{})
 (def ^{:dynamic true} *in-revision*    #{})
@@ -32,7 +33,10 @@
       (f)
       (let [rev (or (get-revision obj) 0)]
         (if (<= *revision* rev)
-          (printf "skipping revision: revision [%s] <= current revision [%s]\n" *revision* rev)
+          (if (empty? *in-transaction*)
+            (printf "skipping revision: revision [%s] <= current revision [%s]\n" *revision* rev)
+            (throw (InvalidTransactionException.
+                    (format "cannot skip revision [%s] because it is nested in transactions: %s" *revision* *in-transaction*))))
           (binding [*in-revision* (conj *in-revision* obj)]
             (let [result (f)]
               (if *revision*
@@ -54,7 +58,7 @@
   [f]
   (fn []
     (try (f)
-         (catch javax.transaction.TransactionRolledbackException e))))
+         (catch TransactionRolledbackException e))))
 
 (defn wrapped-txn [f obj]
   (if (satisfies? WrappedTransactional obj)
@@ -84,4 +88,4 @@
 (defn abort-transaction
   "Throws an exception that will be caught by catch-rollbacks to abort the transaction."
   []
-  (throw (javax.transaction.TransactionRolledbackException.)))
+  (throw (TransactionRolledbackException.)))
