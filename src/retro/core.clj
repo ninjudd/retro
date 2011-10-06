@@ -3,45 +3,26 @@
 
 (def ^{:dynamic true} *in-transaction* #{})
 (def ^{:dynamic true} *in-revision*    #{})
-(def ^{:dynamic true} *revision*       nil)
 
 (defprotocol Transactional
-  (txn-begin    [obj] "Begin a new transaction.")
-  (txn-commit   [obj] "Commit the current transaction.")
-  (txn-rollback [obj] "Rollback the current transaction."))
+  (txn-begin [obj]
+    "Begin a new transaction.")
+  (txn-commit [obj]
+    "Commit the current transaction.")
+  (txn-rollback [obj]
+    "Rollback the current transaction."))
 
 (defprotocol WrappedTransactional
-  (txn-wrap [obj f] "Wrap the given function in a transaction, returning a new function."))
+  (txn-wrap [obj f]
+    "Wrap the given function in a transaction, returning a new function."))
 
 (defprotocol Revisioned
-  (get-revision  [obj]     "Returns the current revision.")
-  (set-revision! [obj rev] "Set the current revision to rev."))
-
-(defmacro at-revision
-  "Execute the given forms with the curren revision set to rev. Can be used to mark changes with a given
-   revision, or read the state at a given revision."
-  [rev & forms]
-  `(binding [*revision* ~rev]
-      ~@forms))
-
-(defn- skip-past-revisions
-  "Wraps the given function in a new function that skips it if the current revision has already
-   been applied, also setting the revision upon executing the function."
-  [f obj]
-  (fn []
-    (if (or (nil? *revision*) (contains? *in-revision* obj))
-      (f)
-      (let [rev (or (get-revision obj) 0)]
-        (if (<= *revision* rev)
-          (if (empty? *in-transaction*)
-            (printf "skipping revision: revision [%s] <= current revision [%s]\n" *revision* rev)
-            (throw (InvalidTransactionException.
-                    (format "cannot skip revision [%s] because it is nested in transactions: %s" *revision* *in-transaction*))))
-          (binding [*in-revision* (conj *in-revision* obj)]
-            (let [result (f)]
-              (if *revision*
-                (set-revision! obj *revision*))
-              result)))))))
+  (get-revisions [obj key]
+    "Returns a list of at least one previous revision if any exist.")
+  (at-revision [obj rev]
+    "Return a copy of obj with the current revision set to rev.")
+  (current-revision [obj]
+    "Return the current revision."))
 
 (defn- ignore-nested-transactions
   "Takes two functions, one that's wrapped in a transaction and one that's not, returning a new fn
@@ -77,8 +58,7 @@
   [f obj]
   (-> (wrapped-txn f obj)
       (catch-rollbacks)
-      (ignore-nested-transactions f obj)
-      (skip-past-revisions obj)))
+      (ignore-nested-transactions f obj)))
 
 (defmacro with-transaction
   "Execute forms within a transaction on the specified object."
