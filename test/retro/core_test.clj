@@ -31,6 +31,7 @@
   (RevisionSeq. (ref init-data) []))
 
 (defn revisioned-update [rev-seq f & args]
+  (modify! rev-seq)
   (apply alter (:data rev-seq)
          update-in [(inc (current-revision rev-seq))] f args))
 
@@ -38,6 +39,7 @@
   (revisioned-update rev-seq (constantly data)))
 
 (defn hard-set [rev-seq data]
+  (modify! rev-seq)
   (ref-set (:data rev-seq) data))
 
 (deftest without-revisions
@@ -82,3 +84,16 @@
                        (enqueue #(inc "TEST"))))))
     (is (= 20 (get-data (at-revision obj nil)))) ;; nothing persisted
     ))
+
+(deftest test-no-mutators
+  (let [obj1 (make [10 20])
+        obj2 (make '[a b])]
+    (is (thrown? Exception
+                 (dotxn obj1
+                   (hard-set obj1 [10 20 30]))))
+    (is (thrown? Exception
+                 (dotxn obj1
+                   (dotxn obj2
+                     (enqueue obj2 (fn [_]
+                                     (hard-set obj1 [10 20 30]))))
+                   obj1)))))
