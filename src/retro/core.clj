@@ -34,10 +34,10 @@
   (before-mutate [obj]
     "Called before beginning to apply queued mutations on obj. The return value of
      this hook is used instead of obj, so you may (for example) empty the queue to
-     cancel all pending actions."))
+     cancel all pending actions if the queue contains an illegal action."))
 
 (let [conj (fnil conj [])]
-  (extend-type IObj
+  (extend-type clojure.lang.IObj
     Queueable
     (enqueue [this f]
       (vary-meta this update-in [::queue] conj f))
@@ -55,7 +55,7 @@
   (before-mutate [obj]
     obj))
 
-(def ^:dynamic *active-transaction* nil)
+(def ^{:dynamic true} *active-transaction* nil)
 
 (defn modify!
   "Alert retro that an operation is about to occur which will modify the given object.
