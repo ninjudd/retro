@@ -65,14 +65,13 @@
     (is (= 2 (max-rev obj)))))
 
 (deftest test-visibility
-  (binding [*print-meta* true]
-    (let [obj (at-revision (make [10 20]) 1)]
-      (dotxn obj
-        (let [obj (enqueue obj #(revisioned-set % 30))]
-          (is (thrown? Exception ;; shouldn't actually be written yet
-                       (get-data (at-revision obj 2))))
-          (enqueue obj #(revisioned-update % inc))))
-      (is (= 31 (get-data (at-revision obj nil)))))))
+  (let [obj (at-revision (make [10 20]) 1)]
+    (dotxn obj
+      (let [obj (enqueue obj #(revisioned-set % 30))]
+        (is (thrown? Exception ;; shouldn't actually be written yet
+                     (get-data (at-revision obj 2))))
+        (enqueue obj #(revisioned-update % inc))))
+    (is (= 31 (get-data (at-revision obj nil))))))
 
 (deftest test-transactionality
   (let [obj (at-revision (make [10 20]) 1)]
