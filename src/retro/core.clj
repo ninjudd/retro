@@ -16,13 +16,57 @@
   (txn-wrap [obj f]
     "Wrap the given function in a transaction, returning a new function."))
 
+(defprotocol Queueable
+  "A retro object capable of queuing up a list of operations to be performed later,
+   typically at transaction-commit time."
+  (enqueue [obj f]
+    "Add an action - it will be called later with the single argument obj.")
+  (get-queue [obj]
+    "Return a sequence of this object's pending actions."))
+
 (defprotocol Revisioned
-  (get-revisions [obj key]
-    "Returns a list of at least one previous revision if any exist.")
   (at-revision [obj rev]
     "Return a copy of obj with the current revision set to rev.")
   (current-revision [obj]
     "Return the current revision."))
+
+(defprotocol TransactionHooks
+  (before-mutate [obj]
+    "Called before beginning to apply queued mutations on obj. The return value of
+     this hook is used instead of obj, so you may (for example) empty the queue to
+     cancel all pending actions."))
+
+(let [conj (fnil conj [])]
+  (extend-type IObj
+    Queueable
+    (enqueue [this f]
+      (vary-meta this update-in [::queue] conj f))
+    (get-queue [this]
+      (-> this meta ::queue))
+
+    Revisioned
+    (at-revision [this rev]
+      (vary-meta this assoc ::revision rev))
+    (current-revision [this]
+      (-> this meta ::revision))))
+
+(extend-protocol TransactionHooks
+  Object
+  (before-mutate [obj]
+    obj))
+
+(def ^:dynamic *active-transaction* nil)
+
+(defn modify!
+  "Alert retro that an operation is about to occur which will modify the given object.
+   If there is an active transaction which is not expected to modify the object,
+   retro will throw an exception. Should be used similarly to clojure.core/io!."
+  [obj]
+  (when (and *active-transaction*
+             (not (identical? obj *active-transaction*)))
+    (throw (IllegalStateException.
+            (format "Attempt to modify %s while in a transaction on %s"
+                    obj *active-transaction*)))))
 
 (defn- ignore-nested-transactions
   "Takes two functions, one that's wrapped in a transaction and one that's not, returning a new fn
@@ -69,3 +113,16 @@
   "Throws an exception that will be caught by catch-rollbacks to abort the transaction."
   []
   (throw (TransactionRolledbackException.)))
+
+(defmacro dotxn
+  "Perform body in a transaction around obj. The body should evaluate to a version of
+   obj with some actions enqueued via its implementation of Queueable; those actions
+   will be performed after the object has been passed through its before-mutate hook."
+  [obj & body]
+  `(with-transaction ~obj
+     (binding [*active-transaction* 'writes-disabled] ;; no bang methods allowed anywhere
+       (let [obj# (before-mutate (do ~@body))
+             queue# (get-queue obj#)]
+         (binding [*active-transaction* obj#] ;; bang methods on this object allowed now
+           (doseq [f# queue#]
+             (f# obj#)))))))
