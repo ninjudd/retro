@@ -73,3 +73,13 @@
                        (get-data (at-revision obj 2))))
           (enqueue obj #(revisioned-update % inc))))
       (is (= 31 (get-data (at-revision obj nil)))))))
+
+(deftest test-transactionality
+  (let [obj (at-revision (make [10 20]) 1)]
+    (is (thrown? Exception
+                 (dotxn obj
+                   (-> obj
+                       (enqueue #(revisioned-set % 30))
+                       (enqueue #(inc "TEST"))))))
+    (is (= 20 (get-data (at-revision obj nil)))) ;; nothing persisted
+    ))
