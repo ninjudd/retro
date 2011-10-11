@@ -63,37 +63,43 @@
     (is (= 20 (get-data obj)))
     (dotxn obj
       (enqueue obj #(revisioned-set % 100)))
-    (is (= 20 (get-data obj)))
-    (is (= 2 (max-rev obj)))))
+    (testing "changing the past is a NOP"
+      (is (= 20 (get-data obj)))
+      (is (= 2 (max-rev obj))))))
 
 (deftest test-visibility
   (let [obj (at-revision (make [10 20]) 1)]
     (dotxn obj
       (let [obj (enqueue obj #(revisioned-set % 30))]
-        (is (thrown? Exception ;; shouldn't actually be written yet
-                     (get-data (at-revision obj 2))))
+        (testing "can't see pending revisions"
+          (is (thrown? Exception ;; shouldn't actually be written yet
+                       (get-data (at-revision obj 2)))))
         (enqueue obj #(revisioned-update % inc))))
-    (is (= 31 (get-data (at-revision obj nil))))))
+    (testing "updates are applied in sequence"
+      (is (= 31 (get-data (at-revision obj nil)))))))
 
 (deftest test-transactionality
   (let [obj (at-revision (make [10 20]) 1)]
-    (is (thrown? Exception
-                 (dotxn obj
-                   (-> obj
-                       (enqueue #(revisioned-set % 30))
-                       (enqueue #(inc "TEST"))))))
-    (is (= 20 (get-data (at-revision obj nil)))) ;; nothing persisted
-    ))
+    (testing "exceptions propagate"
+      (is (thrown? Exception
+                   (dotxn obj
+                     (-> obj
+                         (enqueue #(revisioned-set % 30))
+                         (enqueue #(inc "TEST")))))))
+    (testing "exceptions cause writes to be cancelled"
+      (is (= 20 (get-data (at-revision obj nil)))))))
 
 (deftest test-no-mutators
   (let [obj1 (make [10 20])
         obj2 (make '[a b])]
-    (is (thrown? Exception
-                 (dotxn obj1
-                   (hard-set obj1 [10 20 30]))))
-    (is (thrown? Exception
-                 (dotxn obj1
-                   (dotxn obj2
-                     (enqueue obj2 (fn [_]
-                                     (hard-set obj1 [10 20 30]))))
-                   obj1)))))
+    (testing "in a transaction you can only enqueue actions"
+      (is (thrown? Exception
+                   (dotxn obj1
+                     (hard-set obj1 [10 20 30])))))
+    (testing "can't mutate x while applying queued actions for y"
+      (is (thrown? Exception
+                   (dotxn obj1
+                     (dotxn obj2
+                       (enqueue obj2 (fn [_]
+                                       (hard-set obj1 [10 20 30]))))
+                     obj1))))))
