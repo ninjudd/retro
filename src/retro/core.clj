@@ -22,7 +22,9 @@
   (enqueue [obj f]
     "Add an action - it will be called later with the single argument obj.")
   (get-queue [obj]
-    "Return a sequence of this object's pending actions."))
+    "Return a sequence of this object's pending actions.")
+  (empty-queue [obj]
+    "Empty this object's queue."))
 
 (defprotocol Revisioned
   (at-revision [obj rev]
@@ -43,6 +45,8 @@
       (vary-meta this update-in [::queue] conj f))
     (get-queue [this]
       (-> this meta ::queue))
+    (empty-queue [this]
+      (vary-meta this assoc ::queue []))
 
     Revisioned
     (at-revision [this rev]

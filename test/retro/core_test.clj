@@ -10,6 +10,8 @@
     (update-in this [:queue] conj f))
   (get-queue [this]
     queue)
+  (empty-queue [this]
+    (RevisionSeq. data []))
 
   TransactionHooks
   (before-mutate [this]
