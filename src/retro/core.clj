@@ -17,8 +17,15 @@
     "Wrap the given function in a transaction, returning a new function."))
 
 (defprotocol Transactioning
-  (in-transaction [obj v])
-  (in-transaction? [obj]))
+  "An object that is capable of explicitly tracking whether it is in a
+   transaction. The behavior of these functions should be unaffected by calls
+   to txn-wrap, txn-begin, etc. - retro may, for example, ask you to temporarily
+   claim to not be in a transaction, as part of your transaction."
+  (in-transaction [obj v]
+    "Set whether the object is in a transaction (based on the truthiness
+     of v).")
+  (in-transaction? [obj]
+    "Indicate whether the object is currently in a transaction."))
 
 (defprotocol Queueable
   "A retro object capable of queuing up a list of operations to be performed later,
