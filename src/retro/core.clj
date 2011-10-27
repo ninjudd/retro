@@ -87,46 +87,43 @@
             (format "Attempt to modify %s while in a transaction on %s"
                     obj *active-transaction*)))))
 
-(defn- active-object [f]
-  (fn [obj]
-    (binding [*active-transaction* obj]
-      (f obj))))
-
-(defn- ignore-nested-transactions
-  "Takes two functions, one that's wrapped in a transaction and one that's not, returning a new fn
-   that calls the transactional fn if not currently in a transaction or otherwise calls the plain fn."
-  [f-txn f]
-  (fn [obj]
-    (if (in-transaction? obj)
-      (f obj)
-      (in-transaction (f-txn (in-transaction obj true))
-                      false))))
-
-(defn- catch-rollbacks
-  "Takes a function and wraps it in a new function that catches the exception thrown by abort-transaction."
-  [f]
-  (fn [obj]
-    (try (f obj)
-         (catch TransactionRolledbackException e obj))))
-
-(defn wrapped-txn [f obj]
-  (if (satisfies? WrappedTransactional obj)
-    (txn-wrap obj f)
+(do
+  ;;; These function-wrapping functions behave kinda like ring wrappers: they
+  ;;; return a function which takes a retro-object and returns a retro-object.
+  (defn- active-object [f]
     (fn [obj]
-      (txn-begin obj)
-      (try (returning (f obj)
-             (txn-commit obj))
-           (catch Throwable e
-             (txn-rollback obj)
-             (throw e))))))
+      (binding [*active-transaction* obj]
+        (f obj))))
 
-(defn wrap-transaction
-  "Takes a function and returns a new function wrapped in a transaction on the given object."
-  [f obj]
-  (-> (active-object f)
-      (wrapped-txn obj)
-      (catch-rollbacks)
-      (ignore-nested-transactions f)))
+  (defn- ignore-nested-transactions
+    "Takes two functions, one that's wrapped in a transaction and one that's not, returning a new fn
+   that calls the transactional fn if not currently in a transaction or otherwise calls the plain fn."
+    [f-txn f]
+    (fn [obj]
+      (if (in-transaction? obj)
+        (f obj)
+        (in-transaction (f-txn (in-transaction obj true))
+                        false))))
+
+  (defn- catch-rollbacks
+    "Takes a function and wraps it in a new function that catches the exception thrown by abort-transaction."
+    [f]
+    (fn [obj]
+      (try (f obj)
+           (catch TransactionRolledbackException e obj))))
+
+  (defn wrap-transaction
+    "Takes a function and returns a new function wrapped in a transaction on the given object."
+    [f obj]
+    (-> (txn-wrap obj f)
+        (active-object)
+        (catch-rollbacks)
+        (ignore-nested-transactions f))))
+
+(defn abort-transaction
+  "Throws an exception that will be caught by catch-rollbacks to abort the transaction."
+  []
+  (throw (TransactionRolledbackException.)))
 
 (defmacro with-transaction
   "Execute forms within a transaction on the specified object."
@@ -137,11 +134,6 @@
                               inner-obj#))
                         obj#)
       obj#)))
-
-(defn abort-transaction
-  "Throws an exception that will be caught by catch-rollbacks to abort the transaction."
-  []
-  (throw (TransactionRolledbackException.)))
 
 (defmacro dotxn
   "Perform body in a transaction around obj. The body should evaluate to a version of
