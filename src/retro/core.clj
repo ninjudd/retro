@@ -1,7 +1,8 @@
 (ns retro.core
+  (:use [useful.utils :only [returning]])
   (:import (javax.transaction InvalidTransactionException TransactionRolledbackException)))
 
-(def ^{:dynamic true} *in-revision*    #{})
+(def ^{:dynamic true} *in-revision* #{})
 
 (defprotocol Transactional
   (txn-begin [obj]
@@ -95,9 +96,8 @@
     (txn-wrap obj f)
     (fn [obj]
       (txn-begin obj)
-      (try (let [result (f obj)]
-             (txn-commit obj)
-             result)
+      (try (returning (f obj)
+             (txn-commit obj))
            (catch Throwable e
              (txn-rollback obj)
              (throw e))))))
@@ -107,7 +107,7 @@
   [f obj]
   (-> (active-object f)
       (wrapped-txn obj)
-      (catch-rollbacks) ;; bang methods on this object only
+      (catch-rollbacks)
       (ignore-nested-transactions f)))
 
 (defmacro with-transaction
