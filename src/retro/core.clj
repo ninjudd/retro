@@ -5,12 +5,12 @@
 (def ^{:dynamic true} *in-revision* #{})
 
 (defprotocol Transactional
-  (txn-begin [obj]
+  (txn-begin! [obj]
     "Begin a new transaction.")
-  (txn-commit [obj]
+  (txn-commit! [obj]
     "Commit the current transaction.")
-  (txn-rollback [obj]
-    "Rollback the current transaction."))
+  (txn-rollback! [obj]
+    "Roll back the current transaction."))
 
 (defprotocol WrappedTransactional
   (txn-wrap [obj f]
@@ -62,6 +62,17 @@
     Transactioning
     (in-transaction [this v] (vary-meta this assoc ::transaction v))
     (in-transaction? [this] (-> this meta ::transaction))))
+
+(extend-type Object
+  WrappedTransactional
+  (txn-wrap [_ f]
+    (fn [obj]
+      (txn-begin! obj)
+      (try (returning (f obj)
+             (txn-commit! obj))
+           (catch Throwable e
+             (txn-rollback! obj)
+             (throw e))))))
 
 (def ^{:dynamic true} *active-transaction* nil)
 
