@@ -1,7 +1,6 @@
 (ns retro.core
   (:import (javax.transaction InvalidTransactionException TransactionRolledbackException)))
 
-(def ^{:dynamic true} *in-transaction* #{})
 (def ^{:dynamic true} *in-revision*    #{})
 
 (defprotocol Transactional
@@ -15,6 +14,10 @@
 (defprotocol WrappedTransactional
   (txn-wrap [obj f]
     "Wrap the given function in a transaction, returning a new function."))
+
+(defprotocol Transactioning
+  (in-transaction [obj v])
+  (in-transaction? [obj]))
 
 (defprotocol Queueable
   "A retro object capable of queuing up a list of operations to be performed later,
@@ -32,12 +35,6 @@
   (current-revision [obj]
     "Return the current revision."))
 
-(defprotocol TransactionHooks
-  (before-mutate [obj]
-    "Called before beginning to apply queued mutations on obj. The return value of
-     this hook is used instead of obj, so you may (for example) empty the queue to
-     cancel all pending actions if the queue contains an illegal action."))
-
 (let [conj (fnil conj [])]
   (extend-type clojure.lang.IObj
     Queueable
@@ -52,12 +49,11 @@
     (at-revision [this rev]
       (vary-meta this assoc ::revision rev))
     (current-revision [this]
-      (-> this meta ::revision))))
+      (-> this meta ::revision))
 
-(extend-protocol TransactionHooks
-  Object
-  (before-mutate [obj]
-    obj))
+    Transactioning
+    (in-transaction [this v] (vary-meta this assoc ::transaction v))
+    (in-transaction? [this] (-> this meta ::transaction))))
 
 (def ^{:dynamic true} *active-transaction* nil)
 
@@ -67,34 +63,39 @@
    retro will throw an exception. Should be used similarly to clojure.core/io!."
   [obj]
   (when (and *active-transaction*
-             (not (identical? obj *active-transaction*)))
+             (not (= obj *active-transaction*)))
     (throw (IllegalStateException.
             (format "Attempt to modify %s while in a transaction on %s"
                     obj *active-transaction*)))))
 
+(defn- active-object [f]
+  (fn [obj]
+    (binding [*active-transaction* obj]
+      (f obj))))
+
 (defn- ignore-nested-transactions
   "Takes two functions, one that's wrapped in a transaction and one that's not, returning a new fn
    that calls the transactional fn if not currently in a transaction or otherwise calls the plain fn."
-  [f-txn f obj]
-  (fn []
-    (if (contains? *in-transaction* obj)
-      (f)
-      (binding [*in-transaction* (conj *in-transaction* obj)]
-        (f-txn)))))
+  [f-txn f]
+  (fn [obj]
+    (if (in-transaction? obj)
+      (f obj)
+      (in-transaction (f-txn (in-transaction obj true))
+                      false))))
 
 (defn- catch-rollbacks
   "Takes a function and wraps it in a new function that catches the exception thrown by abort-transaction."
   [f]
-  (fn []
-    (try (f)
-         (catch TransactionRolledbackException e))))
+  (fn [obj]
+    (try (f obj)
+         (catch TransactionRolledbackException e obj))))
 
 (defn wrapped-txn [f obj]
   (if (satisfies? WrappedTransactional obj)
     (txn-wrap obj f)
-    (fn []
+    (fn [obj]
       (txn-begin obj)
-      (try (let [result (f)]
+      (try (let [result (f obj)]
              (txn-commit obj)
              result)
            (catch Throwable e
@@ -104,14 +105,20 @@
 (defn wrap-transaction
   "Takes a function and returns a new function wrapped in a transaction on the given object."
   [f obj]
-  (-> (wrapped-txn f obj)
-      (catch-rollbacks)
-      (ignore-nested-transactions f obj)))
+  (-> (active-object f)
+      (wrapped-txn obj)
+      (catch-rollbacks) ;; bang methods on this object only
+      (ignore-nested-transactions f)))
 
 (defmacro with-transaction
   "Execute forms within a transaction on the specified object."
   [obj & forms]
-  `((wrap-transaction (fn [] ~@forms) ~obj)))
+  `(let [obj# ~obj]
+     ((wrap-transaction (fn [inner-obj#]
+                          (do ~@forms
+                              inner-obj#))
+                        obj#)
+      obj#)))
 
 (defn abort-transaction
   "Throws an exception that will be caught by catch-rollbacks to abort the transaction."
@@ -123,10 +130,10 @@
    obj with some actions enqueued via its implementation of Queueable; those actions
    will be performed after the object has been passed through its before-mutate hook."
   [obj & body]
-  `(with-transaction ~obj
-     (binding [*active-transaction* 'writes-disabled] ;; no bang methods allowed anywhere
-       (let [obj# (before-mutate (do ~@body))
-             queue# (get-queue obj#)]
-         (binding [*active-transaction* obj#] ;; bang methods on this object allowed now
-           (doseq [f# queue#]
-             (f# obj#)))))))
+  `((wrap-transaction (fn [new-obj#]
+                        (doseq [f# (get-queue new-obj#)]
+                          (f# new-obj#))
+                        (empty-queue new-obj#))
+                      ~obj)
+    (binding [*active-transaction* 'writes-disabled]
+      ~@body)))
