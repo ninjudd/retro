@@ -1,5 +1,6 @@
 (ns retro.core-test
-  (:use clojure.test retro.core))
+  (:use clojure.test retro.core
+        [useful.utils :only [returning]]))
 
 (defn max-rev [rev-seq]
   (dec (count @(:data rev-seq))))
@@ -11,23 +12,31 @@
   (get-queue [this]
     queue)
   (empty-queue [this]
-    (RevisionSeq. data []))
-
-  TransactionHooks
-  (before-mutate [this]
-    (let [rev (current-revision this)]
-      (if (and rev (> (max-rev this) rev))
-        (assoc this :queue []) ;; revision already applied, dump queue
-        this)))
+    (assoc this :queue []))
 
   WrappedTransactional
   (txn-wrap [this f]
-    #(dosync (f))))
+    (fn [rev-seq]
+      (dosync
+       (let [rev (current-revision rev-seq)]
+         (if (and rev (>= (max-rev rev-seq) rev))
+           (f (empty-queue rev-seq)) ;; revision already applied
+           (do
+             (alter (:data rev-seq)
+                    (fn [data]
+                      (conj data (peek data))))
+             (returning (f rev-seq)
+               (alter (:data rev-seq)
+                      (fn [data]
+                        (let [prev (pop data)]
+                          (if (= (peek data) (peek prev))
+                            prev, data))))))))))))
 
 (defn get-data [rev-seq]
-  (let [rev (or (current-revision rev-seq)
-                (max-rev rev-seq))]
-    (nth @(:data rev-seq) rev)))
+  (dosync
+   (let [rev (or (current-revision rev-seq)
+                 (max-rev rev-seq))]
+     (nth @(:data rev-seq) rev))))
 
 (defn make [init-data]
   (RevisionSeq. (ref init-data) []))
@@ -35,7 +44,7 @@
 (defn revisioned-update [rev-seq f & args]
   (modify! rev-seq)
   (apply alter (:data rev-seq)
-         update-in [(inc (current-revision rev-seq))] f args))
+         update-in [(current-revision rev-seq)] f args))
 
 (defn revisioned-set [rev-seq data]
   (revisioned-update rev-seq (constantly data)))
@@ -55,7 +64,7 @@
     (is (= 20 (get-data obj)))
     (is (= 10 (get-data (at-revision obj 0))))
     (dotxn obj
-      (enqueue obj #(revisioned-set % 30)))
+      (enqueue (at-revision obj 2) #(revisioned-set % 30)))
     (is (= 20 (get-data obj)))
     (is (= 30 (get-data (at-revision obj 2))))
     (is (= 30 (get-data (at-revision obj nil))))))
@@ -72,10 +81,10 @@
 (deftest test-visibility
   (let [obj (at-revision (make [10 20]) 1)]
     (dotxn obj
-      (let [obj (enqueue obj #(revisioned-set % 30))]
+      (let [obj (enqueue (at-revision obj 2) #(revisioned-set % 30))]
         (testing "can't see pending revisions"
           (is (thrown? Exception ;; shouldn't actually be written yet
-                       (get-data (at-revision obj 2)))))
+                       (get-data obj))))
         (enqueue obj #(revisioned-update % inc))))
     (testing "updates are applied in sequence"
       (is (= 31 (get-data (at-revision obj nil)))))))
@@ -85,7 +94,7 @@
     (testing "exceptions propagate"
       (is (thrown? Exception
                    (dotxn obj
-                     (-> obj
+                     (-> obj (at-revision 2)
                          (enqueue #(revisioned-set % 30))
                          (enqueue #(inc "TEST")))))))
     (testing "exceptions cause writes to be cancelled"
