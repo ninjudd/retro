@@ -16,17 +16,6 @@
   (txn-wrap [obj f]
     "Wrap the given function in a transaction, returning a new function."))
 
-(defprotocol Transactioning
-  "An object that is capable of explicitly tracking whether it is in a
-   transaction. The behavior of these functions should be unaffected by calls
-   to txn-wrap, txn-begin, etc. - retro may, for example, ask you to temporarily
-   claim to not be in a transaction, as part of your transaction."
-  (in-transaction [obj v]
-    "Set whether the object is in a transaction (based on the truthiness
-     of v).")
-  (in-transaction? [obj]
-    "Indicate whether the object is currently in a transaction."))
-
 (defprotocol Queueable
   "A retro object capable of queuing up a list of operations to be performed later,
    typically at transaction-commit time."
@@ -57,11 +46,7 @@
     (at-revision [this rev]
       (vary-meta this assoc ::revision rev))
     (current-revision [this]
-      (-> this meta ::revision))
-
-    Transactioning
-    (in-transaction [this v] (vary-meta this assoc ::transaction v))
-    (in-transaction? [this] (-> this meta ::transaction))))
+      (-> this meta ::revision))))
 
 (extend-type Object
   WrappedTransactional
@@ -95,16 +80,6 @@
       (binding [*active-transaction* obj]
         (f obj))))
 
-  (defn- ignore-nested-transactions
-    "Takes two functions, one that's wrapped in a transaction and one that's not, returning a new fn
-   that calls the transactional fn if not currently in a transaction or otherwise calls the plain fn."
-    [f-txn f]
-    (fn [obj]
-      (if (in-transaction? obj)
-        (f obj)
-        (in-transaction (f-txn (in-transaction obj true))
-                        false))))
-
   (defn- catch-rollbacks
     "Takes a function and wraps it in a new function that catches the exception thrown by abort-transaction."
     [f]
@@ -117,8 +92,7 @@
     [f obj]
     (-> (txn-wrap obj f)
         (active-object)
-        (catch-rollbacks)
-        (ignore-nested-transactions f))))
+        (catch-rollbacks))))
 
 (defn abort-transaction
   "Throws an exception that will be caught by catch-rollbacks to abort the transaction."
