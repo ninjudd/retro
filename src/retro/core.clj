@@ -30,7 +30,9 @@
   (at-revision [obj rev]
     "Return a copy of obj with the current revision set to rev.")
   (current-revision [obj]
-    "Return the current revision."))
+    "Return the current revision.")
+  (revision-applied? [obj rev]
+    "Tell whether the revision named by rev has already been written."))
 
 (let [conj (fnil conj [])]
   (extend-type clojure.lang.IObj
@@ -46,7 +48,9 @@
     (at-revision [this rev]
       (vary-meta this assoc ::revision rev))
     (current-revision [this]
-      (-> this meta ::revision))))
+      (-> this meta ::revision))
+    (revision-applied? [this rev]
+      false)))
 
 (extend-type Object
   WrappedTransactional
@@ -109,13 +113,22 @@
                         obj#)
       obj#)))
 
+(defn skip-applied-revs
+  "Useful building block for skipping applied revisions. Calling this on a retro object
+  will empty the object's queue if the revision has already been applied."
+  [obj]
+  (let [rev (current-revision obj)]
+    (if (and rev (revision-applied? obj rev))
+      (empty-queue obj)
+      obj)))
+
 (defmacro dotxn
   "Perform body in a transaction around obj. The body should evaluate to a version of
    obj with some actions enqueued via its implementation of Queueable; those actions
    will be performed after the object has been passed through its before-mutate hook."
   [obj & body]
   `((wrap-transaction (fn [new-obj#]
-                        (doseq [f# (get-queue new-obj#)]
+                        (doseq [f# (get-queue (skip-applied-revs new-obj#))]
                           (f# new-obj#))
                         (empty-queue new-obj#))
                       ~obj)
