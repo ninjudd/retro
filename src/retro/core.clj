@@ -30,9 +30,16 @@
   (at-revision [obj rev]
     "Return a copy of obj with the current revision set to rev.")
   (current-revision [obj]
-    "Return the current revision.")
+    "Return the current revision."))
+
+(defprotocol Applied
   (revision-applied? [obj rev]
     "Tell whether the revision named by rev has already been written."))
+
+(defprotocol OrderedRevisions
+  (max-revision [obj]
+    "What is the 'latest' revision that has been applied? Should be unaffected by at-revision
+     'views'. nil is an acceptable answer, meaning 'none', or 'I'm not tracking that'."))
 
 (let [conj (fnil conj [])]
   (extend-type clojure.lang.IObj
@@ -61,7 +68,15 @@
              (txn-commit! obj))
            (catch Throwable e
              (txn-rollback! obj)
-             (throw e))))))
+             (throw e)))))
+  Applied
+  (revision-applied? [this rev]
+    (when-let [max (max-revision this)]
+      (>= max rev)))
+
+  OrderedRevisions
+  (max-revision [this]
+    nil))
 
 (def ^{:dynamic true} *active-transaction* nil)
 
