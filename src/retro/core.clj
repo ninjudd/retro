@@ -39,7 +39,10 @@
 (defprotocol OrderedRevisions
   (max-revision [obj]
     "What is the 'latest' revision that has been applied? Should be unaffected by at-revision
-     'views'. nil is an acceptable answer, meaning 'none', or 'I'm not tracking that'."))
+     'views'. nil is an acceptable answer, meaning 'none', or 'I'm not tracking that'.")
+  (touch [obj]
+    "Mark the current revision as being applied, guaranteeing that max-revision returns a
+     number at least as large as the object's current revision."))
 
 (let [conj (fnil conj [])]
   (extend-type clojure.lang.IObj
@@ -76,6 +79,8 @@
 
   OrderedRevisions
   (max-revision [this]
+    nil)
+  (touch [this]
     nil))
 
 (def ^{:dynamic true} *active-transaction* nil)
@@ -106,12 +111,20 @@
       (try (f obj)
            (catch TransactionRolledbackException e obj))))
 
+  (defn wrap-touching
+    "Wrap a function so that the active object is touched at the end."
+    [f]
+    (fn [obj]
+      (returning (f obj)
+        (touch obj))))
+
   (defn wrap-transaction
     "Takes a function and returns a new function wrapped in a transaction on the given object."
     [f obj]
-    (-> (txn-wrap obj f)
-        (active-object)
-        (catch-rollbacks))))
+    (->> (wrap-touching f)
+         (txn-wrap obj)
+         (active-object)
+         (catch-rollbacks))))
 
 (defn abort-transaction
   "Throws an exception that will be caught by catch-rollbacks to abort the transaction."
