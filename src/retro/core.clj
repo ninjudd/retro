@@ -16,16 +16,6 @@
   (txn-wrap [obj f]
     "Wrap the given function in a transaction, returning a new function."))
 
-(defprotocol Queueable
-  "A retro object capable of queuing up a list of operations to be performed later,
-   typically at transaction-commit time."
-  (enqueue [obj f]
-    "Add an action - it will be called later with the single argument obj.")
-  (get-queue [obj]
-    "Return a sequence of this object's pending actions.")
-  (empty-queue [obj]
-    "Empty this object's queue."))
-
 (defprotocol Revisioned
   (at-revision [obj rev]
     "Return a copy of obj with the current revision set to rev.")
@@ -46,14 +36,6 @@
 
 (let [conj (fnil conj [])]
   (extend-type clojure.lang.IObj
-    Queueable
-    (enqueue [this f]
-      (vary-meta this update-in [::queue] conj f))
-    (get-queue [this]
-      (-> this meta ::queue))
-    (empty-queue [this]
-      (vary-meta this assoc ::queue []))
-
     Revisioned
     (at-revision [this rev]
       (vary-meta this assoc ::revision rev))
