@@ -102,15 +102,6 @@
                         obj#)
       obj#)))
 
-(defn skip-applied-revs
-  "Useful building block for skipping applied revisions. Calling this on a retro object
-  will empty the object's queue if the revision has already been applied."
-  [obj]
-  (let [rev (current-revision obj)]
-    (if (and rev (revision-applied? obj rev))
-      (empty-queue obj)
-      obj)))
-
 (defmacro dotxn
   "Perform body in a transaction around obj. The body should evaluate to a version of
    obj with some actions enqueued via its implementation of Queueable; those actions
