@@ -1,87 +1,164 @@
-(ns retro.core)
+(ns retro.core
+  (:use [useful.utils :only [returning]])
+  (:import (javax.transaction InvalidTransactionException TransactionRolledbackException)))
 
-(def ^{:dynamic true} *in-transaction* #{})
-(def ^{:dynamic true} *in-revision*    #{})
-(def ^{:dynamic true} *revision*       nil)
+(def ^{:dynamic true} *in-revision* #{})
 
 (defprotocol Transactional
-  (txn-begin    [obj] "Begin a new transaction.")
-  (txn-commit   [obj] "Commit the current transaction.")
-  (txn-rollback [obj] "Rollback the current transaction."))
+  (txn-begin! [obj]
+    "Begin a new transaction.")
+  (txn-commit! [obj]
+    "Commit the current transaction.")
+  (txn-rollback! [obj]
+    "Roll back the current transaction."))
 
 (defprotocol WrappedTransactional
-  (txn-wrap [obj f] "Wrap the given function in a transaction, returning a new function."))
+  (txn-wrap [obj f]
+    "Wrap the given function in a transaction, returning a new function."))
+
+(defprotocol Queueable
+  "A retro object capable of queuing up a list of operations to be performed later,
+   typically at transaction-commit time."
+  (enqueue [obj f]
+    "Add an action - it will be called later with the single argument obj.")
+  (get-queue [obj]
+    "Return a sequence of this object's pending actions.")
+  (empty-queue [obj]
+    "Empty this object's queue."))
 
 (defprotocol Revisioned
-  (get-revision  [obj]     "Returns the current revision.")
-  (set-revision! [obj rev] "Set the current revision to rev."))
+  (at-revision [obj rev]
+    "Return a copy of obj with the current revision set to rev.")
+  (current-revision [obj]
+    "Return the current revision."))
 
-(defmacro at-revision
-  "Execute the given forms with the curren revision set to rev. Can be used to mark changes with a given
-   revision, or read the state at a given revision."
-  [rev & forms]
-  `(binding [*revision* ~rev]
-      ~@forms))
+(defprotocol Applied
+  (revision-applied? [obj rev]
+    "Tell whether the revision named by rev has already been written."))
 
-(defn- skip-past-revisions
-  "Wraps the given function in a new function that skips it if the current revision has already
-   been applied, also setting the revision upon executing the function."
-  [f obj]
-  (fn []
-    (if (or (nil? *revision*) (contains? *in-revision* obj))
-      (f)
-      (let [rev (or (get-revision obj) 0)]
-        (if (<= *revision* rev)
-          (printf "skipping revision: revision [%s] <= current revision [%s]\n" *revision* rev)
-          (binding [*in-revision* (conj *in-revision* obj)]
-            (let [result (f)]
-              (if *revision*
-                (set-revision! obj *revision*))
-              result)))))))
+(defprotocol OrderedRevisions
+  (max-revision [obj]
+    "What is the 'latest' revision that has been applied? Should be unaffected by at-revision
+     'views'. nil is an acceptable answer, meaning 'none', or 'I'm not tracking that'.")
+  (touch [obj]
+    "Mark the current revision as being applied, guaranteeing that max-revision returns a
+     number at least as large as the object's current revision."))
 
-(defn- ignore-nested-transactions
-  "Takes two functions, one that's wrapped in a transaction and one that's not, returning a new fn
-   that calls the transactional fn if not currently in a transaction or otherwise calls the plain fn."
-  [f-txn f obj]
-  (fn []
-    (if (contains? *in-transaction* obj)
-      (f)
-      (binding [*in-transaction* (conj *in-transaction* obj)]
-        (f-txn)))))
+(let [conj (fnil conj [])]
+  (extend-type clojure.lang.IObj
+    Queueable
+    (enqueue [this f]
+      (vary-meta this update-in [::queue] conj f))
+    (get-queue [this]
+      (-> this meta ::queue))
+    (empty-queue [this]
+      (vary-meta this assoc ::queue []))
 
-(defn- catch-rollbacks
-  "Takes a function and wraps it in a new function that catches the exception thrown by abort-transaction."
-  [f]
-  (fn []
-    (try (f)
-         (catch javax.transaction.TransactionRolledbackException e))))
+    Revisioned
+    (at-revision [this rev]
+      (vary-meta this assoc ::revision rev))
+    (current-revision [this]
+      (-> this meta ::revision))
+    (revision-applied? [this rev]
+      false)))
 
-(defn wrapped-txn [f obj]
-  (if (satisfies? WrappedTransactional obj)
-    (txn-wrap obj f)
-    (fn []
-      (txn-begin obj)
-      (try (let [result (f)]
-             (txn-commit obj)
-             result)
+(extend-type Object
+  WrappedTransactional
+  (txn-wrap [_ f]
+    (fn [obj]
+      (txn-begin! obj)
+      (try (returning (f obj)
+             (txn-commit! obj))
            (catch Throwable e
-             (txn-rollback obj)
-             (throw e))))))
+             (txn-rollback! obj)
+             (throw e)))))
+  Applied
+  (revision-applied? [this rev]
+    (when-let [max (max-revision this)]
+      (>= max rev)))
 
-(defn wrap-transaction
-  "Takes a function and returns a new function wrapped in a transaction on the given object."
-  [f obj]
-  (-> (wrapped-txn f obj)
-      (catch-rollbacks)
-      (ignore-nested-transactions f obj)
-      (skip-past-revisions obj)))
+  OrderedRevisions
+  (max-revision [this]
+    nil)
+  (touch [this]
+    nil))
 
-(defmacro with-transaction
-  "Execute forms within a transaction on the specified object."
-  [obj & forms]
-  `((wrap-transaction (fn [] ~@forms) ~obj)))
+(def ^{:dynamic true} *active-transaction* nil)
+
+(defn modify!
+  "Alert retro that an operation is about to occur which will modify the given object.
+   If there is an active transaction which is not expected to modify the object,
+   retro will throw an exception. Should be used similarly to clojure.core/io!."
+  [obj]
+  (when (and *active-transaction*
+             (not (= obj *active-transaction*)))
+    (throw (IllegalStateException.
+            (format "Attempt to modify %s while in a transaction on %s"
+                    obj *active-transaction*)))))
+
+(do
+  ;;; These function-wrapping functions behave kinda like ring wrappers: they
+  ;;; return a function which takes a retro-object and returns a retro-object.
+  (defn- active-object [f]
+    (fn [obj]
+      (binding [*active-transaction* obj]
+        (f obj))))
+
+  (defn- catch-rollbacks
+    "Takes a function and wraps it in a new function that catches the exception thrown by abort-transaction."
+    [f]
+    (fn [obj]
+      (try (f obj)
+           (catch TransactionRolledbackException e obj))))
+
+  (defn wrap-touching
+    "Wrap a function so that the active object is touched at the end."
+    [f]
+    (fn [obj]
+      (returning (f obj)
+        (touch obj))))
+
+  (defn wrap-transaction
+    "Takes a function and returns a new function wrapped in a transaction on the given object."
+    [f obj]
+    (->> (wrap-touching f)
+         (txn-wrap obj)
+         (active-object)
+         (catch-rollbacks))))
 
 (defn abort-transaction
   "Throws an exception that will be caught by catch-rollbacks to abort the transaction."
   []
-  (throw (javax.transaction.TransactionRolledbackException.)))
+  (throw (TransactionRolledbackException.)))
+
+(defmacro with-transaction
+  "Execute forms within a transaction on the specified object."
+  [obj & forms]
+  `(let [obj# ~obj]
+     ((wrap-transaction (fn [inner-obj#]
+                          (do ~@forms
+                              inner-obj#))
+                        obj#)
+      obj#)))
+
+(defn skip-applied-revs
+  "Useful building block for skipping applied revisions. Calling this on a retro object
+  will empty the object's queue if the revision has already been applied."
+  [obj]
+  (let [rev (current-revision obj)]
+    (if (and rev (revision-applied? obj rev))
+      (empty-queue obj)
+      obj)))
+
+(defmacro dotxn
+  "Perform body in a transaction around obj. The body should evaluate to a version of
+   obj with some actions enqueued via its implementation of Queueable; those actions
+   will be performed after the object has been passed through its before-mutate hook."
+  [obj & body]
+  `((wrap-transaction (fn [new-obj#]
+                        (doseq [f# (get-queue (skip-applied-revs new-obj#))]
+                          (f# new-obj#))
+                        (empty-queue new-obj#))
+                      ~obj)
+    (binding [*active-transaction* 'writes-disabled]
+      ~@body)))
