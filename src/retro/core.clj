@@ -133,7 +133,7 @@
            write-view)))
       (dissoc actions focus))))
 
-(defmacro do-txn [focus & body]
+(defmacro dotxn [focus & body]
   `(let [focus# ~focus]
      (txn* focus# {focus# [(fn [_#] ~@body)]})))
 
