@@ -83,34 +83,20 @@
   (touch [this]
     nil))
 
-(def ^{:dynamic true} *active-transaction* nil)
+(def ^{:dynamic true} *read-only* nil)
 
 (defn modify!
   "Alert retro that an operation is about to occur which will modify the given object.
    If there is an active transaction which is not expected to modify the object,
    retro will throw an exception. Should be used similarly to clojure.core/io!."
   [obj]
-  (when (and *active-transaction*
-             (not (= obj *active-transaction*)))
+  (when *read-only*
     (throw (IllegalStateException.
-            (format "Attempt to modify %s while in a transaction on %s"
-                    obj *active-transaction*)))))
+            (format "Attempt to modify %s while in read-only mode" obj)))))
 
 (do
   ;;; These function-wrapping functions behave kinda like ring wrappers: they
   ;;; return a function which takes a retro-object and returns a retro-object.
-  (defn- active-object [f]
-    (fn [obj]
-      (binding [*active-transaction* obj]
-        (f obj))))
-
-  (defn- catch-rollbacks
-    "Takes a function and wraps it in a new function that catches the exception thrown by abort-transaction."
-    [f]
-    (fn [obj]
-      (try (f obj)
-           (catch TransactionRolledbackException e obj))))
-
   (defn wrap-touching
     "Wrap a function so that the active object is touched at the end."
     [f]
@@ -122,14 +108,7 @@
     "Takes a function and returns a new function wrapped in a transaction on the given object."
     [f obj]
     (->> (wrap-touching f)
-         (txn-wrap obj)
-         (active-object)
-         (catch-rollbacks))))
-
-(defn abort-transaction
-  "Throws an exception that will be caught by catch-rollbacks to abort the transaction."
-  []
-  (throw (TransactionRolledbackException.)))
+         (txn-wrap obj))))
 
 (defmacro with-transaction
   "Execute forms within a transaction on the specified object."
@@ -156,9 +135,10 @@
    will be performed after the object has been passed through its before-mutate hook."
   [obj & body]
   `((wrap-transaction (fn [new-obj#]
-                        (doseq [f# (get-queue (skip-applied-revs new-obj#))]
-                          (f# new-obj#))
+                        (binding [*read-only* false]
+                          (doseq [f# (get-queue (skip-applied-revs new-obj#))]
+                            (f# new-obj#)))
                         (empty-queue new-obj#))
                       ~obj)
-    (binding [*active-transaction* 'writes-disabled]
+    (binding [*read-only* true]
       ~@body)))
