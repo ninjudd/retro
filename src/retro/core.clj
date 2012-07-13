@@ -89,8 +89,8 @@
   (defn wrap-transaction
     "Takes a function and returns a new function wrapped in a transaction on the given object."
     [f obj]
-    (->> (wrap-touching f)
-         (txn-wrap obj))))
+    (txn-wrap obj
+              (wrap-touching f))))
 
 (defmacro with-transaction
   "Execute forms within a transaction on the specified object."
