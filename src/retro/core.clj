@@ -115,3 +115,27 @@
                       ~obj)
     (binding [*read-only* true]
       ~@body)))
+
+(defn txn* [focus action-fn]
+  (binding [*read-only* true]
+    (let [revision (current-revision focus)
+          actions (action-fn focus)]
+      (when-not (and revision
+                     (revision-applied? focus revision))
+        (let [write-view (if revision
+                           (at-revision focus (inc revision))
+                           focus)]
+          (set! *read-only* false)
+          ((wrap-transaction (fn [obj]
+                               (doseq [action (get actions focus)]
+                                 (action obj)))
+                             write-view)
+           write-view)))
+      (dissoc actions focus))))
+
+(defmacro do-txn [focus & body]
+  `(let [focus# ~focus]
+     (txn* focus# {focus# [(fn [_#] ~@body)]})))
+
+(defmacro txn [focus actions]
+  `(txn* ~focus (fn [_#] ~@actions)))
