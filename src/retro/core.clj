@@ -2,8 +2,6 @@
   (:use [useful.utils :only [returning]])
   (:import (javax.transaction InvalidTransactionException TransactionRolledbackException)))
 
-(def ^{:dynamic true} *in-revision* #{})
-
 (defprotocol Transactional
   (txn-begin! [obj]
     "Begin a new transaction.")
