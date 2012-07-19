@@ -44,13 +44,13 @@
 
 (extend-type Object
   WrappedTransactional
-  (txn-wrap [_ f]
-    (fn [obj]
-      (txn-begin! obj)
-      (try (returning (f obj)
-             (txn-commit! obj))
+  (txn-wrap [this f]
+    (fn []
+      (txn-begin! this)
+      (try (returning (f)
+             (txn-commit! this))
            (catch Throwable e
-             (txn-rollback! obj)
+             (txn-rollback! this)
              (throw e)))))
   Applied
   (revision-applied? [this rev]
@@ -79,61 +79,74 @@
   ;;; return a function which takes a retro-object and returns a retro-object.
   (defn wrap-touching
     "Wrap a function so that the active object is touched at the end."
-    [f]
-    (fn [obj]
-      (returning (f obj)
+    [obj f]
+    (fn []
+      (returning (f)
         (touch obj))))
 
   (defn wrap-transaction
     "Takes a function and returns a new function wrapped in a transaction on the given object."
-    [f obj]
-    (txn-wrap obj
-              (wrap-touching f))))
+    [obj f]
+    (->> f
+         (wrap-touching obj)
+         (txn-wrap obj))))
 
-(defmacro with-transaction
-  "Execute forms within a transaction on the specified object."
-  [obj & forms]
-  `(let [obj# ~obj]
-     ((wrap-transaction (fn [inner-obj#]
-                          (do ~@forms
-                              inner-obj#))
-                        obj#)
-      obj#)))
+(defn- call-wrapped*
+  "Calls [f] inside a transaction on all the [objects]. Assumes they all implement Transactional,
+  so that it is acceptable to call txn-begin! on them all, apply f, and then txn-commit! them all
+  in reverse order."
+  [objects f]
+  (doseq [obj objects]
+    (txn-begin! obj))
+  (let [apply! (fn [& fs]
+                 (doseq [obj (rseq objects), f fs]
+                   (f obj)))]
+    (try
+      (f)
+      (apply! touch txn-commit!)
+      (catch Throwable t
+        (apply! txn-rollback!)
+        (throw t)))))
 
-(defmacro dotxn
-  "Perform body in a transaction around obj. The body should evaluate to a version of
-   obj with some actions enqueued via its implementation of Queueable; those actions
-   will be performed after the object has been passed through its before-mutate hook."
-  [obj & body]
-  `((wrap-transaction (fn [new-obj#]
-                        (binding [*read-only* false]
-                          (doseq [f# (get-queue (skip-applied-revs new-obj#))]
-                            (f# new-obj#)))
-                        (empty-queue new-obj#))
-                      ~obj)
-    (binding [*read-only* true]
-      ~@body)))
+(defn call-wrapped
+  "Calls [f] inside a transaction on all the [objects]. Attempts to minimize stack depth by using
+  Transactional when possible, but will use WrappedTransactional as necessary."
+  [objects f]
+  (loop [f f, to-wrap [], objects objects]
+    (if-let [[x & xs] (seq objects)]
+      (if (satisfies? Transactional x)
+        (recur f
+               (conj to-wrap x)
+               xs)
+        (let [wrapped-f (wrap-transaction x f)]
+          (recur #(call-wrapped* to-wrap wrapped-f)
+                 []
+                 xs)))
+      (call-wrapped* to-wrap f))))
 
-(defn txn* [focus action-fn]
-  (binding [*read-only* true]
-    (let [revision (current-revision focus)
-          actions (action-fn focus)]
-      (when-not (and revision
-                     (revision-applied? focus revision))
-        (let [write-view (if revision
-                           (at-revision focus (inc revision))
-                           focus)]
-          (set! *read-only* false)
-          ((wrap-transaction (fn [obj]
-                               (doseq [action (get actions focus)]
-                                 (action obj)))
-                             write-view)
-           write-view)))
-      (dissoc actions focus))))
+(defn txn* [foci action-thunk]
+  (let [actions (binding [*read-only* true] (action-thunk))]
+    (reduce (fn [actions focus]
+              (let [read-revision (current-revision focus)
+                    write-revision (if read-revision
+                                     (inc read-revision)
+                                     read-revision)]
+                (when-not (and write-revision
+                               (revision-applied? focus write-revision))
+                  (let [write-view (if write-revision
+                                     (at-revision focus write-revision)
+                                     focus)]
+                    (binding [*read-only* false]
+                      (call-wrapped [write-view]
+                                    (fn []
+                                      (doseq [action (get actions focus)]
+                                        (action write-view))))))))
+              (dissoc actions focus))
+            actions
+            foci)))
 
-(defmacro dotxn [focus & body]
-  `(let [focus# ~focus]
-     (txn* focus# {focus# [(fn [_#] ~@body)]})))
+(defmacro txn [foci actions]
+  `(txn* ~foci (fn [] ~actions)))
 
-(defmacro txn [focus actions]
-  `(txn* ~focus (fn [_#] ~@actions)))
+(defmacro dotxn [foci & body]
+  `(call-wrapped ~foci (fn [] ~@body)))
