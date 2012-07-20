@@ -31,15 +31,14 @@
     "Mark the current revision as being applied, guaranteeing that max-revision returns a
      number at least as large as the object's current revision."))
 
-(let [conj (fnil conj [])]
-  (extend-type clojure.lang.IObj
-    Revisioned
-    (at-revision [this rev]
-      (vary-meta this assoc ::revision rev))
-    (current-revision [this]
-      (-> this meta ::revision))
-    (revision-applied? [this rev]
-      false)))
+(extend-type clojure.lang.IObj
+  Revisioned
+  (at-revision [this rev]
+    (vary-meta this assoc ::revision rev))
+  (current-revision [this]
+    (-> this meta ::revision))
+  (revision-applied? [this rev]
+    false))
 
 (extend-type Object
   WrappedTransactional
