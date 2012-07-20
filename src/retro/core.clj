@@ -1,6 +1,5 @@
 (ns retro.core
-  (:use [useful.utils :only [returning]])
-  (:import (javax.transaction InvalidTransactionException TransactionRolledbackException)))
+  (:use [useful.utils :only [returning]]))
 
 (defprotocol Transactional
   (txn-begin! [obj]
