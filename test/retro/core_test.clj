@@ -1,116 +1,90 @@
 (ns retro.core-test
   (:use clojure.test retro.core
+        useful.debug
         [useful.utils :only [returning]]))
 
-(defn max-rev [rev-seq]
-  (dec (count @(:data rev-seq))))
+(defrecord RevisionMap [revisions committed-revisions]
+  Transactional
+  (txn-begin! [this]
+    (reset! committed-revisions @revisions))
+  (txn-commit! [this]
+    nil)
+  (txn-rollback! [this]
+    (reset! revisions @committed-revisions))
 
-(defrecord RevisionSeq [data queue]
-  Queueable
-  (enqueue [this f]
-    (update-in this [:queue] conj f))
-  (get-queue [this]
-    queue)
-  (empty-queue [this]
-    (assoc this :queue []))
+  OrderedRevisions
+  (max-revision [this]
+    (first (keys @revisions)))
+  (touch [this]
+    (swap! revisions
+           (fn [revisions]
+             (let [curr (current-revision this)]
+               (if (contains? revisions curr)
+                 revisions
+                 (assoc revisions curr (first (vals revisions)))))))))
 
-  WrappedTransactional
-  (txn-wrap [this f]
-    (fn [rev-seq]
-      (dosync
-       (let [rev (current-revision rev-seq)]
-         (if (and rev (>= (max-rev rev-seq) rev))
-           (f (empty-queue rev-seq)) ;; revision already applied
-           (do
-             (alter (:data rev-seq)
-                    (fn [data]
-                      (conj data (peek data))))
-             (returning (f rev-seq)
-               (alter (:data rev-seq)
-                      (fn [data]
-                        (let [prev (pop data)]
-                          (if (= (peek data) (peek prev))
-                            prev, data))))))))))))
+(defn data-at [revision-map revision]
+  (first (vals (subseq @(:revisions revision-map)
+                       >= revision))))
 
-(defn get-data [rev-seq]
-  (dosync
-   (let [rev (or (current-revision rev-seq)
-                 (max-rev rev-seq))]
-     (nth @(:data rev-seq) rev))))
+(defn active-revision [revision-map]
+  (some #(% revision-map) [current-revision max-revision]))
+
+(defn current-data [revision-map]
+  (data-at revision-map (active-revision revision-map)))
+
+(defn update-data [revision-map f]
+  (swap! (:revisions revision-map)
+         (fn [revisions]
+           (assoc revisions (current-revision revision-map)
+                  (f (current-data revision-map))))))
 
 (defn make [init-data]
-  (RevisionSeq. (ref init-data) []))
+  (let [m (into (sorted-map-by >) init-data)]
+    (RevisionMap. (atom m) (atom m))))
 
-(defn revisioned-update [rev-seq f & args]
-  (modify! rev-seq)
-  (apply alter (:data rev-seq)
-         update-in [(current-revision rev-seq)] f args))
+(def ^:dynamic a)
+(def ^:dynamic b)
 
-(defn revisioned-set [rev-seq data]
-  (revisioned-update rev-seq (constantly data)))
+(use-fixtures :each (fn [f]
+                      (binding [a (make {1 1})
+                                b (make {1 1 2 2})]
+                        (f))))
 
-(defn hard-set [rev-seq data]
-  (modify! rev-seq)
-  (ref-set (:data rev-seq) data))
+(deftest test-revisionmap
+  (is (= 1 (current-data a)))
+  (is (= 2 (current-data b)))
+  (is (= 1 (current-data (at-revision b 1)))))
 
-(deftest without-revisions
-  (let [obj (make [10 20])]
-    (dotxn obj
-      (enqueue obj #(hard-set % [10 20 30])))
-    (is (= 30 (get-data obj)))))
+(deftest test-dotxn
+  (let [a (at-revision a 3)
+        b (at-revision b 3)]
+    (dotxn [a b]
+      (update-data a inc)
+      (update-data b inc)))
 
-(deftest with-revisions
-  (let [obj (at-revision (make [10 20]) 1)]
-    (is (= 20 (get-data obj)))
-    (is (= 10 (get-data (at-revision obj 0))))
-    (dotxn obj
-      (enqueue (at-revision obj 2) #(revisioned-set % 30)))
-    (is (= 20 (get-data obj)))
-    (is (= 30 (get-data (at-revision obj 2))))
-    (is (= 30 (get-data (at-revision obj nil))))))
+  (is (= 3 (max-revision a) (max-revision b)))
+  (is (= 2 (current-data a)))
+  (is (= 3 (current-data b))))
 
-(deftest skip-old-revisions
-  (let [obj (at-revision (make [10 20 30]) 1)]
-    (is (= 20 (get-data obj)))
-    (dotxn obj
-      (enqueue obj #(revisioned-set % 100)))
-    (testing "changing the past is a NOP"
-      (is (= 20 (get-data obj)))
-      (is (= 2 (max-rev obj))))))
+(deftest test-txn
+  (let [a (at-revision a 2)
+        b (at-revision b 2)]
+    (txn [a b]
+      {a [#(update-data % inc) #(update-data % inc)]
+       b [#(update-data % (partial + 10))]}))
 
-(deftest test-visibility
-  (let [obj (at-revision (make [10 20]) 1)]
-    (dotxn obj
-      (let [obj (enqueue (at-revision obj 2) #(revisioned-set % 30))]
-        (testing "can't see pending revisions"
-          (is (thrown? Exception ;; shouldn't actually be written yet
-                       (get-data obj))))
-        (enqueue obj #(revisioned-update % inc))))
-    (testing "updates are applied in sequence"
-      (is (= 31 (get-data (at-revision obj nil)))))))
+  (is (= 3 (max-revision a) (max-revision b)))
+  (is (= 3 (current-data a)))
+  (is (= 12 (current-data b))))
 
-(deftest test-transactionality
-  (let [obj (at-revision (make [10 20]) 1)]
-    (testing "exceptions propagate"
-      (is (thrown? Exception
-                   (dotxn obj
-                     (-> obj (at-revision 2)
-                         (enqueue #(revisioned-set % 30))
-                         (enqueue #(inc "TEST")))))))
-    (testing "exceptions cause writes to be cancelled"
-      (is (= 20 (get-data (at-revision obj nil)))))))
+(deftest test-applied-revisions
+  (let [a (at-revision a 1)
+        b (at-revision b 1)]
+    (txn [a b]
+      {a [#(update-data % inc)] ;; should apply, because a has no revision 2
+       b [#(update-data % inc)]})) ;; should be skipped: b has already seen revision 2
 
-(deftest test-no-mutators
-  (let [obj1 (make [10 20])
-        obj2 (make '[a b])]
-    (testing "in a transaction you can only enqueue actions"
-      (is (thrown? Exception
-                   (dotxn obj1
-                     (hard-set obj1 [10 20 30])))))
-    (testing "can't mutate x while applying queued actions for y"
-      (is (thrown? Exception
-                   (dotxn obj1
-                     (dotxn obj2
-                       (enqueue obj2 (fn [_]
-                                       (hard-set obj1 [10 20 30]))))
-                     obj1))))))
+  (is (= 2 (max-revision a) (max-revision b)))
+  (is (= 2 (current-data a)))
+  (is (= 2 (current-data b))))

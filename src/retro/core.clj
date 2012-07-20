@@ -2,8 +2,6 @@
   (:use [useful.utils :only [returning]])
   (:import (javax.transaction InvalidTransactionException TransactionRolledbackException)))
 
-(def ^{:dynamic true} *in-revision* #{})
-
 (defprotocol Transactional
   (txn-begin! [obj]
     "Begin a new transaction.")
@@ -15,16 +13,6 @@
 (defprotocol WrappedTransactional
   (txn-wrap [obj f]
     "Wrap the given function in a transaction, returning a new function."))
-
-(defprotocol Queueable
-  "A retro object capable of queuing up a list of operations to be performed later,
-   typically at transaction-commit time."
-  (enqueue [obj f]
-    "Add an action - it will be called later with the single argument obj.")
-  (get-queue [obj]
-    "Return a sequence of this object's pending actions.")
-  (empty-queue [obj]
-    "Empty this object's queue."))
 
 (defprotocol Revisioned
   (at-revision [obj rev]
@@ -46,14 +34,6 @@
 
 (let [conj (fnil conj [])]
   (extend-type clojure.lang.IObj
-    Queueable
-    (enqueue [this f]
-      (vary-meta this update-in [::queue] conj f))
-    (get-queue [this]
-      (-> this meta ::queue))
-    (empty-queue [this]
-      (vary-meta this assoc ::queue []))
-
     Revisioned
     (at-revision [this rev]
       (vary-meta this assoc ::revision rev))
@@ -64,13 +44,13 @@
 
 (extend-type Object
   WrappedTransactional
-  (txn-wrap [_ f]
-    (fn [obj]
-      (txn-begin! obj)
-      (try (returning (f obj)
-             (txn-commit! obj))
+  (txn-wrap [this f]
+    (fn []
+      (txn-begin! this)
+      (try (returning (f)
+             (txn-commit! this))
            (catch Throwable e
-             (txn-rollback! obj)
+             (txn-rollback! this)
              (throw e)))))
   Applied
   (revision-applied? [this rev]
@@ -83,82 +63,90 @@
   (touch [this]
     nil))
 
-(def ^{:dynamic true} *active-transaction* nil)
+(def ^{:dynamic true} *read-only* nil)
 
 (defn modify!
   "Alert retro that an operation is about to occur which will modify the given object.
    If there is an active transaction which is not expected to modify the object,
    retro will throw an exception. Should be used similarly to clojure.core/io!."
   [obj]
-  (when (and *active-transaction*
-             (not (= obj *active-transaction*)))
+  (when *read-only*
     (throw (IllegalStateException.
-            (format "Attempt to modify %s while in a transaction on %s"
-                    obj *active-transaction*)))))
+            (format "Attempt to modify %s while in read-only mode" obj)))))
 
 (do
   ;;; These function-wrapping functions behave kinda like ring wrappers: they
   ;;; return a function which takes a retro-object and returns a retro-object.
-  (defn- active-object [f]
-    (fn [obj]
-      (binding [*active-transaction* obj]
-        (f obj))))
-
-  (defn- catch-rollbacks
-    "Takes a function and wraps it in a new function that catches the exception thrown by abort-transaction."
-    [f]
-    (fn [obj]
-      (try (f obj)
-           (catch TransactionRolledbackException e obj))))
-
   (defn wrap-touching
     "Wrap a function so that the active object is touched at the end."
-    [f]
-    (fn [obj]
-      (returning (f obj)
+    [obj f]
+    (fn []
+      (returning (f)
         (touch obj))))
 
   (defn wrap-transaction
     "Takes a function and returns a new function wrapped in a transaction on the given object."
-    [f obj]
-    (->> (wrap-touching f)
-         (txn-wrap obj)
-         (active-object)
-         (catch-rollbacks))))
+    [obj f]
+    (->> f
+         (wrap-touching obj)
+         (txn-wrap obj))))
 
-(defn abort-transaction
-  "Throws an exception that will be caught by catch-rollbacks to abort the transaction."
-  []
-  (throw (TransactionRolledbackException.)))
+(defn- call-wrapped*
+  "Calls [f] inside a transaction on all the [objects]. Assumes they all implement Transactional,
+  so that it is acceptable to call txn-begin! on them all, apply f, and then txn-commit! them all
+  in reverse order."
+  [objects f]
+  (doseq [obj objects]
+    (txn-begin! obj))
+  (let [apply! (fn [& fs]
+                 (doseq [obj (rseq objects), f fs]
+                   (f obj)))]
+    (try
+      (f)
+      (apply! touch txn-commit!)
+      (catch Throwable t
+        (apply! txn-rollback!)
+        (throw t)))))
 
-(defmacro with-transaction
-  "Execute forms within a transaction on the specified object."
-  [obj & forms]
-  `(let [obj# ~obj]
-     ((wrap-transaction (fn [inner-obj#]
-                          (do ~@forms
-                              inner-obj#))
-                        obj#)
-      obj#)))
+(defn call-wrapped
+  "Calls [f] inside a transaction on all the [objects]. Attempts to minimize stack depth by using
+  Transactional when possible, but will use WrappedTransactional as necessary."
+  [objects f]
+  (loop [f f, to-wrap [], objects objects]
+    (if-let [[x & xs] (seq objects)]
+      (if (satisfies? Transactional x)
+        (recur f
+               (conj to-wrap x)
+               xs)
+        (let [wrapped-f (wrap-transaction x f)]
+          (recur #(call-wrapped* to-wrap wrapped-f)
+                 []
+                 xs)))
+      (call-wrapped* to-wrap f))))
 
-(defn skip-applied-revs
-  "Useful building block for skipping applied revisions. Calling this on a retro object
-  will empty the object's queue if the revision has already been applied."
-  [obj]
-  (let [rev (current-revision obj)]
-    (if (and rev (revision-applied? obj rev))
-      (empty-queue obj)
-      obj)))
+(defn txn* [foci action-thunk]
+  (let [actions (binding [*read-only* true] (action-thunk))]
+    (reduce (fn [actions focus]
+              (let [read-revision (current-revision focus)
+                    write-revision (if read-revision
+                                     (inc read-revision)
+                                     read-revision)]
+                (when-not (and write-revision
+                               (revision-applied? focus write-revision))
+                  (let [write-view (if write-revision
+                                     (at-revision focus write-revision)
+                                     focus)]
+                    (binding [*read-only* false]
+                      (call-wrapped [write-view]
+                                    (fn []
+                                      (doseq [action (get actions focus)]
+                                        (action write-view))))))))
+              (dissoc actions focus))
+            actions
+            foci)))
 
-(defmacro dotxn
-  "Perform body in a transaction around obj. The body should evaluate to a version of
-   obj with some actions enqueued via its implementation of Queueable; those actions
-   will be performed after the object has been passed through its before-mutate hook."
-  [obj & body]
-  `((wrap-transaction (fn [new-obj#]
-                        (doseq [f# (get-queue (skip-applied-revs new-obj#))]
-                          (f# new-obj#))
-                        (empty-queue new-obj#))
-                      ~obj)
-    (binding [*active-transaction* 'writes-disabled]
-      ~@body)))
+(defmacro txn [foci actions]
+  `(txn* ~foci (fn [] ~actions)))
+
+(defmacro dotxn [foci & body]
+  `(call-wrapped ~foci (fn [] ~@body)))

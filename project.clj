@@ -1,4 +1,4 @@
-(defproject retro "0.6.0-beta1"
+(defproject retro "0.6.0"
   :description "A protocol for revisioned transactions in Clojure."
-  :dependencies [[clojure "1.3.0"]
+  :dependencies [[org.clojure/clojure "1.3.0"]
                  [useful "0.7.5"]])
