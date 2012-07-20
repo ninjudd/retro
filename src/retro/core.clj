@@ -72,22 +72,19 @@
     (throw (IllegalStateException.
             (format "Attempt to modify %s while in read-only mode" obj)))))
 
-(do
-  ;;; These function-wrapping functions behave kinda like ring wrappers: they
-  ;;; return a function which takes a retro-object and returns a retro-object.
-  (defn wrap-touching
-    "Wrap a function so that the active object is touched at the end."
-    [obj f]
-    (fn []
-      (returning (f)
-        (touch obj))))
+(defn wrap-touching
+  "Wrap a function so that the active object is touched at the end."
+  [obj f]
+  (fn []
+    (returning (f)
+      (touch obj))))
 
-  (defn wrap-transaction
-    "Takes a function and returns a new function wrapped in a transaction on the given object."
-    [obj f]
-    (->> f
-         (wrap-touching obj)
-         (txn-wrap obj))))
+(defn wrap-transaction
+  "Takes a function and returns a new function wrapped in a transaction on the given object."
+  [obj f]
+  (->> f
+       (wrap-touching obj)
+       (txn-wrap obj)))
 
 (defn- call-wrapped*
   "Calls [f] inside a transaction on all the [objects]. Assumes they all implement Transactional,
