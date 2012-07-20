@@ -119,7 +119,14 @@
                  xs)))
       (call-wrapped* to-wrap f))))
 
-(defn txn* [foci action-thunk]
+(defn txn*
+  "Perform a transaction across multiple Retro objects. The [action-thunk] will be evaluated in
+  read-only mode, and should return a map from focus objects (identical? to items in [foci]) to a
+  sequence of functions. For each focus object, a transaction will be opened at the *next* revision,
+  and the \"action\" functions will each be called, in order, with the in-transaction object as an
+  argument. Once each action has been applied, the transaction will be closed, and the next focus
+  object's actions begin."
+  [foci action-thunk]
   (let [actions (binding [*read-only* true] (action-thunk))]
     (reduce (fn [actions focus]
               (let [read-revision (current-revision focus)
@@ -140,8 +147,12 @@
             actions
             foci)))
 
-(defmacro txn [foci actions]
+(defmacro txn
+  "Sugar around txn*: actions is now a single form (with NO implicit do), rather than a thunk."
+  [foci actions]
   `(txn* ~foci (fn [] ~actions)))
 
-(defmacro dotxn [foci & body]
+(defmacro dotxn
+  "Open a transaction around each focus object, then evaluate body, then close the transactions."
+  [foci & body]
   `(call-wrapped ~foci (fn [] ~@body)))
