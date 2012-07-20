@@ -11,7 +11,7 @@
 
 (defprotocol WrappedTransactional
   (txn-wrap [obj f]
-    "Wrap the given function in a transaction, returning a new function."))
+    "Wrap the given thunk in a transaction, returning a new thunk."))
 
 (defprotocol Revisioned
   (at-revision [obj rev]
