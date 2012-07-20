@@ -61,7 +61,7 @@
   (touch [this]
     nil))
 
-(def ^{:dynamic true} *read-only* nil)
+(def ^:dynamic *read-only* nil)
 
 (defn modify!
   "Alert retro that an operation is about to occur which will modify the given object.
