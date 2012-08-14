@@ -119,6 +119,12 @@
                  xs)))
       (call-wrapped* to-wrap f))))
 
+(defn combine
+  "Create a single combined action-map out of multiple action-maps, by performing the left-most
+  actions first."
+  [& action-maps]
+  (apply merge-with concat {} action-maps))
+
 (defn txn*
   "Perform a transaction across multiple Retro objects. The [action-thunk] will be evaluated in
   read-only mode, and should return a map from focus objects (identical? to items in [foci]) to a
