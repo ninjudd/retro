@@ -97,8 +97,8 @@
                  (doseq [obj (rseq objects), f fs]
                    (f obj)))]
     (try
-      (f)
-      (apply! touch txn-commit!)
+      (returning (f)
+        (apply! touch txn-commit!))
       (catch Throwable t
         (apply! txn-rollback!)
         (throw t)))))
