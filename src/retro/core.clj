@@ -134,24 +134,23 @@
   object's actions begin."
   [foci action-thunk]
   (let [actions (binding [*read-only* true] (action-thunk))]
-    (reduce (fn [actions focus]
-              (let [read-revision (current-revision focus)
-                    write-revision (if read-revision
-                                     (inc read-revision)
-                                     read-revision)]
-                (when-not (and write-revision
-                               (revision-applied? focus write-revision))
-                  (let [write-view (if write-revision
-                                     (at-revision focus write-revision)
-                                     focus)]
-                    (binding [*read-only* false]
-                      (call-wrapped [write-view]
-                                    (fn []
-                                      (doseq [action (get actions focus)]
-                                        (action write-view))))))))
-              (dissoc actions focus))
-            actions
-            foci)))
+    (call-wrapped foci
+                  #(reduce (fn [actions focus]
+                             (let [read-revision (current-revision focus)
+                                   write-revision (if read-revision
+                                                    (inc read-revision)
+                                                    read-revision)]
+                               (when-not (and write-revision
+                                              (revision-applied? focus write-revision))
+                                 (let [write-view (if write-revision
+                                                    (at-revision focus write-revision)
+                                                    focus)]
+                                   (binding [*read-only* false]
+                                     (doseq [action (get actions focus)]
+                                       (action write-view))))))
+                             (dissoc actions focus))
+                           actions
+                           foci))))
 
 (defmacro txn
   "Sugar around txn*: actions is now a single form (with NO implicit do), rather than a thunk."
