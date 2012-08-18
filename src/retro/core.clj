@@ -150,6 +150,8 @@
                                    write-revision (if read-revision
                                                     (inc read-revision)
                                                     read-revision)]
+                               ;; TODO move revision-applied logic into client code (eg jiraph),
+                               ;; since we can't necessarily do it correctly at this level.
                                (when-not (and write-revision
                                               (revision-applied? focus write-revision))
                                  (let [write-view (if write-revision
