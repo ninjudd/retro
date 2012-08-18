@@ -129,7 +129,7 @@
                  xs)))
       (call-wrapped* to-wrap f))))
 
-(defn combine
+(defn compose
   "Create a single combined action-map out of multiple action-maps, by performing the left-most
   actions first."
   [& action-maps]
