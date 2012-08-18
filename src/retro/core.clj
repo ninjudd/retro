@@ -61,6 +61,16 @@
   (touch [this]
     nil))
 
+(defn update-revision
+  "If the object has a revision, update it by calling f; otherwise leave it nil."
+  ([obj f]
+     (let [revision (current-revision obj)]
+       (if revision
+         (at-revision obj (f revision))
+         obj)))
+  ([obj f & args]
+     (update-revision obj #(apply f % args))))
+
 (def ^:dynamic *read-only* nil)
 
 (defn modify!
