@@ -154,6 +154,15 @@
                                ;; since we can't necessarily do it correctly at this level.
                                (when-not (and write-revision
                                               (revision-applied? focus write-revision))
+                                 ;; Note to future readers (ie @amalloy and @ninjudd): You really do
+                                 ;; need to inc the revision here, no matter how dumb an idea it
+                                 ;; seems like at the moment. You've discussed this a dozen times
+                                 ;; because you keep forgetting why. The answer is, if you come back
+                                 ;; up from a crash while trying to apply revision 10, you need to
+                                 ;; make sure that the data you read while deciding what to do at
+                                 ;; revision 10 is in fact revision 9's data, not revision 10's;
+                                 ;; otherwise you end up with problems when you crash in the middle
+                                 ;; of committing multiple transactions.
                                  (let [write-view (if write-revision
                                                     (at-revision focus write-revision)
                                                     focus)]
