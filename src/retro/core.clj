@@ -141,41 +141,41 @@
   and the \"action\" functions will each be called, in order, with the in-transaction object as an
   argument. Once each action has been applied, the transaction will be closed, and the next focus
   object's actions begin."
-  [foci action-thunk]
-  (let [actions (binding [*read-only* true] (action-thunk))]
-    (call-wrapped foci
-                  #(reduce (fn [actions focus]
-                             (let [read-revision (current-revision focus)
-                                   write-revision (if read-revision
-                                                    (inc read-revision)
-                                                    read-revision)]
-                               ;; TODO move revision-applied logic into client code (eg jiraph),
-                               ;; since we can't necessarily do it correctly at this level.
-                               (when-not (and write-revision
-                                              (revision-applied? focus write-revision))
-                                 ;; Note to future readers (ie @amalloy and @ninjudd): You really do
-                                 ;; need to inc the revision here, no matter how dumb an idea it
-                                 ;; seems like at the moment. You've discussed this a dozen times
-                                 ;; because you keep forgetting why. The answer is, if you come back
-                                 ;; up from a crash while trying to apply revision 10, you need to
-                                 ;; make sure that the data you read while deciding what to do at
-                                 ;; revision 10 is in fact revision 9's data, not revision 10's;
-                                 ;; otherwise you end up with problems when you crash in the middle
-                                 ;; of committing multiple transactions.
-                                 (let [write-view (if write-revision
-                                                    (at-revision focus write-revision)
-                                                    focus)]
-                                   (binding [*read-only* false]
-                                     (doseq [action (get actions focus)]
-                                       (action write-view))))))
-                             (dissoc actions focus))
-                           actions
-                           foci))))
+  ([foci action-thunk] (txn* foci action-thunk inc))
+  ([foci action-thunk revision-bump]
+     (let [actions (binding [*read-only* true] (action-thunk))]
+       (call-wrapped foci
+                     #(reduce (fn [actions focus]
+                                (let [write-view (update-revision focus revision-bump)]
+                                  (when-not (revision-applied? write-view
+                                                               (current-revision write-view))
+                                    ;; Note to future readers (ie @amalloy and @ninjudd): You really
+                                    ;; do need to inc the revision here, no matter how dumb an idea
+                                    ;; it seems like at the moment. You've discussed this a dozen
+                                    ;; times because you keep forgetting why. The answer is, if you
+                                    ;; come back up from a crash while trying to apply revision 10,
+                                    ;; you need to make sure that the data you read while deciding
+                                    ;; what to do at revision 10 is in fact revision 9's data, not
+                                    ;; revision 10's; otherwise you end up with problems when you
+                                    ;; crash in the middle of committing multiple transactions.
+                                    (binding [*read-only* false]
+                                      (doseq [action (get actions focus)]
+                                        (action write-view)))))
+                                (dissoc actions focus))
+                              actions
+                              foci)))))
 
 (defmacro txn
   "Sugar around txn*: actions is now a single form (with NO implicit do), rather than a thunk."
   [foci actions]
   `(txn* ~foci (fn [] ~actions)))
+
+(defmacro unsafe-txn
+  "Apply an action-map similarly to txn, but without bumping the revision of the target object;
+  this is unsafe in terms of recovering from crashes, and should only be used to simulate an older
+  version of retro or for mutation-oriented code."
+  [foci actions]
+  `(txn* ~foci (fn [] ~actions) identity))
 
 (defmacro dotxn
   "Open a transaction around each focus object, then evaluate body, then close the transactions."
