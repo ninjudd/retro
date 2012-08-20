@@ -36,9 +36,7 @@
   (at-revision [this rev]
     (vary-meta this assoc ::revision rev))
   (current-revision [this]
-    (-> this meta ::revision))
-  (revision-applied? [this rev]
-    false))
+    (-> this meta ::revision)))
 
 (extend-type Object
   WrappedTransactional
