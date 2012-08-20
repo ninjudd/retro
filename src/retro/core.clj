@@ -50,8 +50,9 @@
              (throw e)))))
   Applied
   (revision-applied? [this rev]
-    (when-let [max (max-revision this)]
-      (>= max rev)))
+    (when rev
+      (when-let [max (max-revision this)]
+        (>= max rev))))
 
   OrderedRevisions
   (max-revision [this]
