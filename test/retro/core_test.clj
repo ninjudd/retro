@@ -21,7 +21,10 @@
              (let [curr (current-revision this)]
                (if (contains? revisions curr)
                  revisions
-                 (assoc revisions curr (first (vals revisions)))))))))
+                 (assoc revisions curr (first (vals revisions))))))))
+
+  Object
+  (toString [this] (pr-str this)))
 
 (defn data-at [revision-map revision]
   (first (vals (subseq @(:revisions revision-map)
