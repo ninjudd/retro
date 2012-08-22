@@ -37,6 +37,7 @@
   (data-at revision-map (active-revision revision-map)))
 
 (defn update-data [revision-map f]
+  (modify! revision-map)
   (swap! (:revisions revision-map)
          (fn [revisions]
            (assoc revisions (current-revision revision-map)
