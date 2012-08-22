@@ -128,42 +128,57 @@
                  xs)))
       (call-wrapped* to-wrap f))))
 
+(defrecord IOValue [value actions])
+
+(defn with-actions [value actions]
+  (IOValue. value actions))
+
 (defn compose
-  "Create a single combined action-map out of multiple action-maps, by performing the left-most
-  actions first."
-  [& action-maps]
-  (apply merge-with concat {} action-maps))
+  "Create a single combined IOValue out of multiple IOValues, by performing the
+  IO actions in order and returning the value of the right-most IOValue."
+  [& io-values]
+  (with-actions (:value (last io-values))
+    (apply merge-with concat {} (map :actions io-values))))
 
 (defn txn*
-  "Perform a transaction across multiple Retro objects. The [action-thunk] will be evaluated in
-  read-only mode, and should return a map from focus objects (identical? to items in [foci]) to a
-  sequence of functions. For each focus object, a transaction will be opened at the *next* revision,
-  and the \"action\" functions will each be called, in order, with the in-transaction object as an
-  argument. Once each action has been applied, the transaction will be closed, and the next focus
-  object's actions begin."
-  ([foci action-thunk] (txn* foci action-thunk inc))
+  "Perform a transaction across multiple Retro objects. The [action-thunk] will
+  be evaluated in read-only mode, and should return an Actions object,
+  whose :actions should be a map from focus objects - identical? to items in
+  [foci] - to a sequence of functions.
+
+  For each focus object, a transaction will be opened at the *next* revision (or
+  you can pass a [revision-bump] other than inc to adjust how the write-revision
+  is computer), and the \"action\" functions will each be called, in order, with
+  the in-transaction object as an argument. Once each action has been applied,
+  the transaction will be closed, and the next focus object's actions begin.
+
+  The eventual return value of txn* is another Actions object, containing
+  the :value of the one sent in, and whatever :actions were not applied
+  (ie, those that pertain to objects not included in [foci])."
+  ([foci action-thunk]
+     ;; Note to future readers (ie @amalloy and @ninjudd): inc really is the
+     ;; best default here, no matter how dumb an idea it seems like at the
+     ;; moment. You've discussed this a dozen times because you keep forgetting
+     ;; why. The answer is, if you come back up from a crash while trying to
+     ;; apply revision 10, you need to make sure that the data you read while
+     ;; deciding what to do at revision 10 is in fact revision 9's data, not
+     ;; revision 10's; otherwise you end up with problems when you crash in the
+     ;; middle of committing multiple transactions.
+     (txn* foci action-thunk inc))
   ([foci action-thunk revision-bump]
-     (let [actions (binding [*read-only* true] (action-thunk))]
-       (call-wrapped foci
-                     #(reduce (fn [actions focus]
-                                (let [write-view (update-revision focus revision-bump)]
-                                  (when-not (revision-applied? write-view
-                                                               (current-revision write-view))
-                                    ;; Note to future readers (ie @amalloy and @ninjudd): You really
-                                    ;; do need to inc the revision here, no matter how dumb an idea
-                                    ;; it seems like at the moment. You've discussed this a dozen
-                                    ;; times because you keep forgetting why. The answer is, if you
-                                    ;; come back up from a crash while trying to apply revision 10,
-                                    ;; you need to make sure that the data you read while deciding
-                                    ;; what to do at revision 10 is in fact revision 9's data, not
-                                    ;; revision 10's; otherwise you end up with problems when you
-                                    ;; crash in the middle of committing multiple transactions.
-                                    (binding [*read-only* false]
-                                      (doseq [action (get actions focus)]
-                                        (action write-view)))))
-                                (dissoc actions focus))
-                              actions
-                              foci)))))
+     (let [{:keys [actions value]} (binding [*read-only* true] (action-thunk))]
+       (with-actions value
+         (call-wrapped foci
+                       (fn []
+                         (reduce (fn [actions focus]
+                                   (let [write-view (update-revision focus revision-bump)]
+                                     (when-not (revision-applied? write-view
+                                                                  (current-revision write-view))
+                                       (binding [*read-only* false]
+                                         (doseq [action (get actions focus)]
+                                           (action write-view)))))
+                                   (dissoc actions focus))
+                                 actions, foci)))))))
 
 (defmacro txn
   "Sugar around txn*: actions is now a single form (with NO implicit do), rather than a thunk."

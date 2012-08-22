@@ -72,10 +72,13 @@
 
 (deftest test-txn
   (let [a (at-revision a 2)
-        b (at-revision b 2)]
-    (txn [a b]
-      {a [#(update-data % inc) #(update-data % inc)]
-       b [#(update-data % (partial + 10))]}))
+        b (at-revision b 2)
+        txn-result (txn [a b]
+                     (with-actions 'x
+                       {a [#(update-data % inc) #(update-data % inc)]
+                        b [#(update-data % (partial + 10))]}))]
+    (is (= 'x (:value txn-result)))
+    (is (empty? (:actions txn-result))))
 
   (is (= 3 (max-revision a) (max-revision b)))
   (is (= 3 (current-data a)))
@@ -84,9 +87,11 @@
 (deftest test-applied-revisions
   (let [a (at-revision a 1)
         b (at-revision b 1)]
-    (txn [a b]
-      {a [#(update-data % inc)] ;; should apply, because a has no revision 2
-       b [#(update-data % inc)]})) ;; should be skipped: b has already seen revision 2
+    (is (= 'x)
+        (txn [a b]
+          (with-actions 'x
+            {a [#(update-data % inc)] ;; should apply, because a has no revision 2
+             b [#(update-data % inc)]})))) ;; should be skipped: b has already seen revision 2
 
   (is (= 2 (max-revision a) (max-revision b)))
   (is (= 2 (current-data a)))
