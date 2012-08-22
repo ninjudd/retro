@@ -84,6 +84,38 @@
   (is (= 3 (current-data a)))
   (is (= 12 (current-data b))))
 
+(deftest test-nested-txn
+  (let [a (at-revision a 2)
+        b (at-revision b 2)
+        io (with-actions 'value1
+             {a [#(update-data % inc)]
+              b [#(update-data % (constantly 10))]})
+        txn1-result (txn [a] io)]
+    (is (= 'value1 (:value txn1-result)))
+    (is (= #{b} (set (keys (:actions txn1-result)))))
+
+    (is (= 3 (max-revision a)))
+    (is (= 1 (current-data a))) ;; revision-2 view should be unsullied
+    (is (= 2 (current-data (at-revision a 3)))) ;; but 3 should be committed
+
+    (is (= 2 (max-revision b))) ;; b should be entirely untouched
+    (is (= 2 (current-data b)))
+    (is (= 2 (current-data (at-revision b 3))))
+
+    (let [txn2-result (txn [b] (with-actions 'value2 (:actions txn1-result)))]
+      (is (= 'value2 (:value txn2-result)))
+      (is (empty? (:actions txn2-result)))
+
+      ;; same tests on a as above: it should not be touched at all by this txn
+      (is (= 3 (max-revision a)))
+      (is (= 1 (current-data a)))
+      (is (= 2 (current-data (at-revision a 3))))
+
+      ;; but now b should have caught up
+      (is (= 3 (max-revision b)))
+      (is (= 2 (current-data b)))
+      (is (= 10 (current-data (at-revision b 3)))))))
+
 (deftest test-applied-revisions
   (let [a (at-revision a 1)
         b (at-revision b 1)]
