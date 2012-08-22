@@ -168,7 +168,8 @@
   ([foci action-thunk revision-bump]
      (let [{:keys [actions value]} (binding [*read-only* true] (action-thunk))]
        (with-actions value
-         (call-wrapped foci
+         (call-wrapped (for [focus foci]
+                         (update-revision focus revision-bump))
                        (fn []
                          (reduce (fn [actions focus]
                                    (let [write-view (update-revision focus revision-bump)]
