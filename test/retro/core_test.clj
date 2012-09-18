@@ -74,12 +74,11 @@
 (deftest test-txn
   (let [a (at-revision a 2)
         b (at-revision b 2)
-        txn-result (txn [a b]
+        txn-result (txn
                      (with-actions 'x
                        {a [#(update-data % inc) #(update-data % inc)]
                         b [#(update-data % (partial + 10))]}))]
-    (is (= 'x (:value txn-result)))
-    (is (empty? (:actions txn-result))))
+    (is (= 'x txn-result)))
 
   (is (= 3 (max-revision a) (max-revision b)))
   (is (= 3 (current-data a)))
@@ -91,9 +90,10 @@
         io (with-actions 'value1
              {a [#(update-data % inc)]
               b [#(update-data % (constantly 10))]})
-        txn1-result (txn [a] io)]
-    (is (= 'value1 (:value txn1-result)))
-    (is (= #{b} (set (keys (:actions txn1-result)))))
+        txn1-result (txn (update-in io
+                                    [:actions]
+                                    select-keys [a]))] ;; let's pretend the transaction to b failed
+    (is (= 'value1 txn1-result))
 
     (is (= 3 (max-revision a)))
     (is (= 1 (current-data a))) ;; revision-2 view should be unsullied
@@ -103,9 +103,8 @@
     (is (= 2 (current-data b)))
     (is (= 2 (current-data (at-revision b 3))))
 
-    (let [txn2-result (txn [b] (with-actions 'value2 (:actions txn1-result)))]
-      (is (= 'value2 (:value txn2-result)))
-      (is (empty? (:actions txn2-result)))
+    (let [txn2-result (txn io)] ;; attempting to re-commit both a and b (faking crash-recovery)
+      (is (= 'value1 txn2-result))
 
       ;; same tests on a as above: it should not be touched at all by this txn
       (is (= 3 (max-revision a)))
@@ -121,9 +120,9 @@
   (let [a (at-revision a 1)
         b (at-revision b 1)]
     (is (= 'x)
-        (txn [a b]
+        (txn
           (with-actions 'x
-            {a [#(update-data % inc)] ;; should apply, because a has no revision 2
+            {a [#(update-data % inc)]      ;; should apply, because a has no revision 2
              b [#(update-data % inc)]})))) ;; should be skipped: b has already seen revision 2
 
   (is (= 2 (max-revision a) (max-revision b)))

@@ -141,10 +141,9 @@
     (apply merge-with concat {} (map :actions io-values))))
 
 (defn txn*
-  "Perform a transaction across multiple Retro objects. The [action-thunk] will
-  be evaluated in read-only mode, and should return an Actions object,
-  whose :actions should be a map from focus objects - identical? to items in
-  [foci] - to a sequence of functions.
+  "Perform a transaction across multiple Retro objects. The [action-thunk] will be evaluated in
+  read-only mode, and should return an IOValue object, whose :actions should be a map from focus
+  objects - on which transactions will be opened - to a sequence of functions.
 
   For each focus object, a transaction will be opened at the *next* revision (or
   you can pass a [revision-bump] other than inc to adjust how the write-revision
@@ -152,10 +151,8 @@
   the in-transaction object as an argument. Once each action has been applied,
   the transaction will be closed, and the next focus object's actions begin.
 
-  The eventual return value of txn* is another Actions object, containing
-  the :value of the one sent in, and whatever :actions were not applied
-  (ie, those that pertain to objects not included in [foci])."
-  ([foci action-thunk]
+  The eventual return value of txn* is the :value of the IOValue computed."
+  ([action-thunk]
      ;; Note to future readers (ie @amalloy and @ninjudd): inc really is the
      ;; best default here, no matter how dumb an idea it seems like at the
      ;; moment. You've discussed this a dozen times because you keep forgetting
@@ -164,34 +161,35 @@
      ;; deciding what to do at revision 10 is in fact revision 9's data, not
      ;; revision 10's; otherwise you end up with problems when you crash in the
      ;; middle of committing multiple transactions.
-     (txn* foci action-thunk inc))
-  ([foci action-thunk revision-bump]
-     (let [{:keys [actions value]} (binding [*read-only* true] (action-thunk))]
-       (with-actions value
-         (call-wrapped (for [focus foci]
-                         (update-revision focus revision-bump))
-                       (fn []
-                         (reduce (fn [actions focus]
-                                   (let [write-view (update-revision focus revision-bump)]
-                                     (when-not (revision-applied? write-view
-                                                                  (current-revision write-view))
-                                       (binding [*read-only* false]
-                                         (doseq [action (get actions focus)]
-                                           (action write-view)))))
-                                   (dissoc actions focus))
-                                 actions, foci)))))))
+     (txn* action-thunk inc))
+  ([action-thunk revision-bump]
+     (let [{:keys [actions value]} (binding [*read-only* true] (action-thunk))
+           foci (keys actions)]
+       (call-wrapped (for [focus foci]
+                       (update-revision focus revision-bump))
+                     (fn []
+                       (do (reduce (fn [actions focus]
+                                     (let [write-view (update-revision focus revision-bump)]
+                                       (when-not (revision-applied? write-view
+                                                                    (current-revision write-view))
+                                         (binding [*read-only* false]
+                                           (doseq [action (get actions focus)]
+                                             (action write-view)))))
+                                     (dissoc actions focus))
+                                   actions, foci)
+                           value))))))
 
 (defmacro txn
   "Sugar around txn*: actions is now a single form (with NO implicit do), rather than a thunk."
-  [foci actions]
-  `(txn* ~foci (fn [] ~actions)))
+  [actions]
+  `(txn* (fn [] ~actions)))
 
 (defmacro unsafe-txn
   "Apply an action-map similarly to txn, but without bumping the revision of the target object;
   this is unsafe in terms of recovering from crashes, and should only be used to simulate an older
   version of retro or for mutation-oriented code."
-  [foci actions]
-  `(txn* ~foci (fn [] ~actions) identity))
+  [actions]
+  `(txn* (fn [] ~actions) identity))
 
 (defmacro dotxn
   "Open a transaction around each focus object, then evaluate body, then close the transactions."
