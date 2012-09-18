@@ -172,9 +172,8 @@
                                      (let [write-view (update-revision focus revision-bump)]
                                        (when-not (revision-applied? write-view
                                                                     (current-revision write-view))
-                                         (binding [*read-only* false]
-                                           (doseq [action (get actions focus)]
-                                             (action write-view)))))
+                                         (doseq [action (get actions focus)]
+                                           (action write-view))))
                                      (dissoc actions focus))
                                    actions, foci)
                            value))))))
