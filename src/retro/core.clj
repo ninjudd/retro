@@ -169,13 +169,16 @@
                        (update-revision focus revision-bump))
                      (fn []
                        (do (reduce (fn [actions focus]
-                                     (let [write-view (update-revision focus revision-bump)]
-                                       (when (or (not (revision-applied? write-view
-                                                                         (current-revision write-view)))
-                                                 (= (current-revision focus)
-                                                    (current-revision write-view)
-                                                    (max-revision focus)))
-                                         (doseq [action (get actions focus)]
+                                     (let [write-view (update-revision focus revision-bump)
+                                           focus-actions (get actions focus)]
+                                       (when (and (seq focus-actions)
+                                                  (or (not (revision-applied? write-view
+                                                                              (current-revision write-view)))
+                                                      (= (current-revision focus)
+                                                         (current-revision write-view)
+                                                         (max-revision focus))))
+                                         (modify! focus)
+                                         (doseq [action focus-actions]
                                            (action write-view))))
                                      (dissoc actions focus))
                                    actions, foci)
