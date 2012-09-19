@@ -170,8 +170,11 @@
                      (fn []
                        (do (reduce (fn [actions focus]
                                      (let [write-view (update-revision focus revision-bump)]
-                                       (when-not (revision-applied? write-view
-                                                                    (current-revision write-view))
+                                       (when (or (not (revision-applied? write-view
+                                                                         (current-revision write-view)))
+                                                 (= (current-revision focus)
+                                                    (current-revision write-view)
+                                                    (max-revision focus)))
                                          (doseq [action (get actions focus)]
                                            (action write-view))))
                                      (dissoc actions focus))
