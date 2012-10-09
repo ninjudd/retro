@@ -1,5 +1,5 @@
-(ns retro.core-test
-  (:use clojure.test retro.core
+(ns flatland.retro.core-test
+  (:use clojure.test flatland.retro.core
         useful.debug
         [useful.utils :only [returning]]))
 

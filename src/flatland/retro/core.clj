@@ -1,4 +1,4 @@
-(ns retro.core
+(ns flatland.retro.core
   (:use [useful.utils :only [returning]]))
 
 (defprotocol Transactional
