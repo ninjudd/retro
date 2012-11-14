@@ -1,5 +1,5 @@
 (ns flatland.retro.core
-  (:use [useful.utils :only [returning]]))
+  (:use [flatland.useful.utils :only [returning]]))
 
 (defprotocol Transactional
   (txn-begin! [obj]

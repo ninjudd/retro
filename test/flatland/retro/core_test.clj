@@ -1,7 +1,7 @@
 (ns flatland.retro.core-test
   (:use clojure.test flatland.retro.core
-        useful.debug
-        [useful.utils :only [returning]]))
+        flatland.useful.debug
+        [flatland.useful.utils :only [returning]]))
 
 (defrecord RevisionMap [revisions committed-revisions]
   Transactional
