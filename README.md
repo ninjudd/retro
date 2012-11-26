@@ -7,4 +7,4 @@ It is used internally by [Jiraph](http://github.com/flatland/jiraph) and
 
 Add the following to the `:dependencies` key in your `project.clj`:
 
-    [retro "0.5.0"]
+    [org.flatland/retro "0.8.0"]
