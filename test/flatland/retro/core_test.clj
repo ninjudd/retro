@@ -128,3 +128,28 @@
   (is (= 2 (max-revision a) (max-revision b)))
   (is (= 2 (current-data a)))
   (is (= 2 (current-data b))))
+
+(deftest test-unsafe-txn
+  (let [a (at-revision a 2)
+        b (at-revision b 2)]
+    (is (= 'x)
+        (unsafe-txn
+         (with-actions 'x
+           {a [#(update-data % (constantly 5))]
+            b [#(update-data % (constantly 5))]}))))
+  (is (= 2 (max-revision a) (max-revision b)))
+  (is (= 5 (current-data a) (current-data b))))
+
+(deftest test-backdated-unsafe-txn
+  (testing "Can't write in the past (except for most recent revision)"
+    (let [a (at-revision a 1)
+          b (at-revision b 1)]
+      (is (= 'x)
+          (unsafe-txn
+           (with-actions 'x
+             {a [#(update-data % (constantly 5))]
+              b [#(update-data % (constantly 5))]}))))
+    (is (= 1 (max-revision a)))
+    (is (= 2 (max-revision b)))
+    (is (= 5 (current-data a)))
+    (is (= 2 (current-data b)))))
