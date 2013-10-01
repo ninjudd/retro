@@ -123,7 +123,7 @@
         (txn
           (with-actions 'x
             {a [#(update-data % inc)]      ;; should apply, because a has no revision 2
-             b [#(update-data % inc)]})))) ;; should be skipped: b has already seen revision 2
+             b [#(update-data % + 2)]})))) ;; should be skipped: b has already seen revision 2
 
   (is (= 2 (max-revision a) (max-revision b)))
   (is (= 2 (current-data a)))
