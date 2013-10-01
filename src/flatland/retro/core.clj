@@ -24,12 +24,19 @@
     "Tell whether the revision named by rev has already been written."))
 
 (defprotocol OrderedRevisions
-  (max-revision [obj]
-    "What is the 'latest' revision that has been applied? Should be unaffected by at-revision
-     'views'. nil is an acceptable answer, meaning 'none', or 'I'm not tracking that'.")
+  (revision-range [obj]
+    "Return a seq of revisions that describe the object's timestream. These represent plausible
+     answers to the \"vague\" question of \"what is the highest revision of this object that
+     exists?\".
+
+     Note that when no transactions are in progress, this should return a one-element list; however,
+     when a transaction is uncommitted, it is possible for there to be multiple reasonable
+     answers. Should be unaffected by at-revision 'views'.
+
+     nil is an acceptable answer, meaning \"I'm not tracking that\".")
   (touch [obj]
-    "Mark the current revision as being applied, guaranteeing that max-revision returns a
-     number at least as large as the object's current revision."))
+    "Mark the current revision as being applied, guaranteeing that max-revision returns a number at
+     least as large as the object's current revision."))
 
 (extend-type clojure.lang.IObj
   Revisioned
@@ -51,11 +58,11 @@
   Applied
   (revision-applied? [this rev]
     (when rev
-      (when-let [max (max-revision this)]
-        (>= max rev))))
+      (some #(>= % rev)
+            (revision-range this))))
 
   OrderedRevisions
-  (max-revision [this]
+  (revision-range [this]
     nil)
   (touch [this]
     nil))
@@ -176,7 +183,7 @@
                                                                               (current-revision write-view)))
                                                       (= (current-revision focus)
                                                          (current-revision write-view)
-                                                         (max-revision focus))))
+                                                         (apply max (revision-range focus)))))
                                          (modify! focus)
                                          (doseq [action focus-actions]
                                            (action write-view))))

@@ -13,8 +13,8 @@
     (reset! revisions @committed-revisions))
 
   OrderedRevisions
-  (max-revision [this]
-    (first (keys @revisions)))
+  (revision-range [this]
+    [(first (keys @revisions))])
   (touch [this]
     (swap! revisions
            (fn [revisions]
@@ -25,6 +25,9 @@
 
   Object
   (toString [this] (pr-str this)))
+
+(defn max-revision [obj]
+  (apply max (revision-range obj)))
 
 (defn data-at [revision-map revision]
   (first (vals (subseq @(:revisions revision-map)
